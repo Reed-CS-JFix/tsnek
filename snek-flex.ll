@@ -232,12 +232,13 @@
 %option yyclass="Snek::Lexer"
 %option noyywrap
 %option c++
-
+    
 INDT    \t|" " 
 EOLN    \r\n|\n\r|\n|\r
 NMBR    (0|[1-9][0-9]*)
 NAME    [_a-zA-Z][_a-zA-Z0-9]*
 WSPC    {INDT}
+
 
 %%
     
@@ -255,7 +256,6 @@ WSPC    {INDT}
     // Skip lines that only contain whitespace/comments.
     advance_by_text("\n", loc);
 }
-
 
 <INITIAL>{WSPC}+ {
     //
@@ -375,7 +375,15 @@ WSPC    {INDT}
 <MID_LINE>"=" {
     return issue(token::Token_ASGN,yytext,loc);
 }
-    
+
+<MID_LINE>"+=" {
+    return issue(token::Token_PLEQ,yytext,loc);
+}
+
+<MID_LINE>"-=" {
+    return issue(token::Token_MNEQ,yytext,loc);
+}
+
 <MID_LINE>"(" {
     return issue(token::Token_LPAR,yytext,loc);
 }
@@ -383,7 +391,19 @@ WSPC    {INDT}
 <MID_LINE>")" {
     return issue(token::Token_RPAR,yytext,loc);
 }
-     
+
+<MID_LINE>"," {
+    return issue(token::Token_CMMA,yytext,loc);
+}
+
+<MID_LINE>":" {
+    return issue(token::Token_COLN,yytext,loc);
+}
+
+<MID_LINE>"->" {
+    return issue(token::Token_ARRW,yytext,loc);
+}
+
 <MID_LINE>"+" {
     return issue(token::Token_PLUS,yytext,loc);
 }
@@ -403,13 +423,61 @@ WSPC    {INDT}
 <MID_LINE>"%" {
     return issue(token::Token_IMOD,yytext,loc);
 }
+
+<MID_LINE>"<" {
+    return issue(token::Token_LESS,yytext,loc);
+}
+
+<MID_LINE>"<=" {
+    return issue(token::Token_LSEQ,yytext,loc);
+}
+
+<MID_LINE>"==" {
+    return issue(token::Token_EQUL,yytext,loc);
+}
+
+<MID_LINE>and {
+    return issue(token::Token_CONJ,yytext,loc);
+}
+
+<MID_LINE>or {
+    return issue(token::Token_DISJ,yytext,loc);
+}
+
+<MID_LINE>not {
+    return issue(token::Token_LNEG,yytext,loc);
+}
+
+<MID_LINE>def {
+    return issue(token::Token_DEFN,yytext,loc);
+}
     
 <MID_LINE>print {
     return issue(token::Token_PRNT,yytext,loc);
 }
-    
+
+<MID_LINE>if {
+    return issue(token::Token_IFTN,yytext,loc);
+}  
+
+<MID_LINE>else {
+    return issue(token::Token_ELSE,yytext,loc);
+}
+
+<MID_LINE>while {
+    return issue(token::Token_WHLE,yytext,loc);
+}
+
 <MID_LINE>pass {
     return issue(token::Token_PASS,yytext,loc);
+}
+    
+<MID_LINE>return {
+    return issue(token::Token_RTRN,yytext,loc);
+}
+    
+<MID_LINE>len {
+    return issue(token::Token_SLEN,yytext,loc);
 }
     
 <MID_LINE>input {
@@ -423,7 +491,15 @@ WSPC    {INDT}
 <MID_LINE>str {
     return issue(token::Token_STRC,yytext,loc);
 }
-    
+
+<MID_LINE>bool {
+    return issue(token::Token_BOOL,yytext,loc);
+}
+
+<MID_LINE>unit {
+    return issue(token::Token_UNIT,yytext,loc);
+}
+
 <MID_LINE>True {
     return issue(token::Token_TRUE,yytext,loc);
 }
@@ -443,7 +519,6 @@ WSPC    {INDT}
 }
 
 <MID_LINE>{NMBR} {
-
     // Handle integer literals.
     yylval->build<int>(std::stoi(yytext));
     return issue(token::Token_NMBR, yytext, loc);

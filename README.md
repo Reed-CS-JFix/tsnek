@@ -1,1069 +1,864 @@
-<h1 align="center">Project 1: Functions, Loops, and Conditionals</h1>
-<h2 align="center">Reed CSCI 394 Fall 2026</h2>
+**Project 2: Semantic Checks**
+**Reed CSCI 394 Fall 2026**
 
-Your assignment is to build a parser and interpreter for a better version of **Snek**,
-one that has a richer set of constructs than the "straight line" **Snek** of Project 0.
-The parser is written using the **Bison** parser-generator tool and it relies on a lexer written using **Flex**.
-The initial code we provide handles straight line **Snek**.
-You will extend the code to handle the additional language constructs.
+*submit .zip of your (cleaned) source folder by 10/16*
 
-We outline some of the extensions to **Snek** from Project 0, take you through
-some of the starter code, and then explain briefly how to work within
-**Bison** to complete the assignment. We summarize the exercises and then offer
-several bonus exercises at the very end.
+Your assignment is to add a semantic analysis stage to your
+**Snek** code from Project 1. This compiler stage imeediately
+follows the parse stage. It checks that a program doesn't contain a
+certain variety of errors--- namely errors due to applying the wrong operations on
+data, failing to meet the specification of a function
+with a call, or failing to meet the specification of a function
+with a `return`. In short: our analysis will add type checking and
+returns analysis to **Snek**.
 
-# "Crooked" **Snek**
+The kinds of coding errors we'll check are normally allowed
+by Python--- Python doesn't do any type checking, for example--- so we
+are taking the **Snek** language further from Python with these
+changes. We invent a more restrictive dialect of the **Snek**
+language, and the syntax is a little different.
 
-The full **Snek** language for this assignment is given by the following grammar:
+Let's call it **tSnek**. It  has type annotations for its functions
+and variables, in three ways. (1) A programmer has to describe the
+types of the formal parameters of a function or procedure defined
+with `def`. (2) A programmer has to describe the type of value a
+function returns. (3) A programmer has to describe the type of each
+(locally scoped) variable they introduce within a block of a statements.
 
+These type annotations
+limit the way variables can be used, they limit the ways
+that functions and procedures can be called, and what values
+the functions compute.
+And so this new compiler stage is a gate-keeper for which programs
+are run. The lexer stage tosses out programs that use unknown lexemes, the
+parser stage tosses out programs with poor syntax, and this additional
+stage tosses out programs that attempt to apply meaningless operations
+on their values or that fail to make calculations that their
+specification promises.
+
+(##) Changes to the syntax
+
+The type annotations change the language syntax. We modify the rule for
+defining functions and procedures. A function is defined using
+the notation
 ~~~ none
-
-<prgm> ::= <defn>  ... <defn> <blck>
-<defn> ::= def <name> ( <name> , ... , <name> ) : <nest>
-<nest> ::= INDT <blck> DEDT
-<blck> ::= <stmt> <stmt> ... <stmt>
-<stmt> ::= <name> <updt> <expn> EOLN
-         | pass EOLN
-         | print ( <expn> , ... , <expn> ) EOLN
-         | if <expn> : <nest> else : <nest>
-         | while <expn> : <nest>
-         | return <expn> EOLN
-         | return EOLN
-         | <name> ( <expn> , ... , <expn> ) EOLN
-<updt> ::= += | -=
-<expn> ::= <expn> <bnop> <expn>
-         | <unop> <expn>
-         | input ( <expn> ) | int ( <expn> ) | str ( <expn> )
-         | <name> | <ltrl> | ( <expn> )
-         | <name> ( <expn> , ... , <expn> )         
-<bnop> ::= + | - | * | // | %
-         | < | <= | == 
-         | and | or
-<unop> ::= not
-<ltrl> ::= <nmbr> | <strg> | <bool> | <unit>
-<name> ::= x | count | _special | y0 | camelWalk | snake_slither | ...
-<nmbr> ::= 0 | 1 | 2 | 3 | ...
-<bool> ::= True | False
-<unit> ::= None
-<strg> ::= "hello" | "" | ...
-
+<defn> ::= def <name> ( <fmls> ) -> <type> : <nest>
 ~~~
-
-The main additions are the ability to define functions and procedures, and to call them;
-the addition of loops and conditional statements, and the logic and comparison operations
-that support them; and several enhancements to the base code to support all these changes.
-
-Let's go through each of the language additions.
-
-## Function definition, call, and return.
-
-A programmer can now preface their main script with a series of function
-definitions. For example, they can now write code like the following:
+and a procedure is defined using the notation
+~~~ none
+<defn> ::= def <name> ( <fmls> ) : <nest>
+~~~
+Here, `<fmls>` is a list of formal parameter names and their associated types.
+They are given by the rule:
+~~~ none
+<fmls> ::= <nmdc> , ... , <nmdc>
+<nmdc> ::= <name> : <type>
+~~~
+Here, for example, is a function that returns whether the square of
+its parameter `x` is greater than its parameter `y`:
 ~~~ python
-    def square(x):
-        return x * x
-
-    def twoDigit(tens,ones):
-        number = tens * 10 + ones
-        return number
-
-    def report(number):
-        message = "The square of that digit repeated is "
-        message += str(square(number))
-        message += "."
-        print(message)
-        return
-        
-    def get():
-        digit = int(input("Please enter a digit: "))
-        return twoDigit(digit,digit)
-
-    value = get()
-    report(value)
+def square_exceeds(x : int, y : int) -> bool :
+    return (x * x > y)
 ~~~
-This code gives four defintions of `square`, `twoDigit`, `report`, and
-`get`, respectively. The first two and the last are functions that
-return an integer value, and the third is a procedure that returns
-when it is done with its work. And then the main script runs, with the
-first line calling the `get` function (which relies on `twoDigit`)
-and the second line invoking the `report` procedure (which relies on
-`square`).
-
-The syntax for `def` relies on indentation, and the indentation rules
-are similar to those followed by the **FOO** and **BAZ** languages
-from Homework 1. There is the `def` line followed by several lines
-indented by the same amount, typically with four spaces. The line
-following the function's definition has a "de-dentation" where the
-subsequent line (either another `def` or the main script lines,
-for this example) is not indented.
-
-The grammar rules that specify this are:
-~~~ none
-<defn> ::= def <name> ( <name> , ... , <name> ) : <nest>
-<nest> ::= INDT <blck> DEDT
-<blck> ::= <stmt> <stmt> ... <stmt>
-~~~
-A parser is expected to get a token stream that includes these
-special `INDT` and `DEDT` tokens that summarize the indentation
-witnessed when the source code is scanned. After an `INDT` token,
-the subsequent statement lines are indented at a certain level.
-That level is retracted to a prior level when a `DEDT` is issued.
-In a way, `INDT` and `DEDT` serve as the analogue to C's
-open and closed curly brace notation, where blocks are marked with
-`{` and `}`. 
-
-There are two kinds of `return` statements for exiting a called
-routine. If the definition is of a function, then the syntax is
-~~~ none
-    <stmt> ::= return <expn> EOLN
-~~~
-and the value being returned is specified just after the `return`
-token. If instead a procedure is being defined, then the syntax is
-~~~ none
-    <stmt> ::= return EOLN
-~~~
-which exits the procedure immediately.
-
-Your parser need not check whether the use of `return` is consistent
-throughout the definition's body, nor does it need to check whether
-a `return` occurs. That kind of check is left for later semantic
-analysis phases. For future compiler extensions, we will perform
-these kinds of checks. For this assignment, those checks occur 
-within the interpreter component.
-
-A procedure call occurs as a program statement and has this syntax:
-~~~ none
-    <stmt> ::= <name> ( <expn> , ... , <expn> ) EOLN
-~~~
-This means it is invoked by name with 0 or more parameter
-values passed as the arguments given by the expressions in parentheses.
-The parser does not check whether the number of arguments match
-the number of parameters in the procedure's definition, nor does
-it check whether there exists a `def` for that name. Again, this
-kind of check is for a later semantic analysis phase.
-
-A function call is similar, except it occurs anywhere a value expression
-can be used, e.g. on the right-hand side of an assignment statement.
-
-Note that the ability to define "subroutines"---functions and procedures---
-gets rid of the "straight line" execution of our programs.
-
-## Loops.
-
-The language now has a while loop that has the syntax:
-~~~ none
-    <stmt> ::= while <expn> : <nest>
-~~~
-The expression after the `while` gives the condition for continuing
-execution of the loop. It is expected to be of boolean type meaning
-it should yield the value `True` or the value `False`. The code that
-follows it should be indented. Any loop bodies nested inside a
-loop should be indented further. For example:
-~~~ none
-r = 0
-while r < 10:
-    c = 0
-    while c < 10:
-        print(str(r)+str(c))
-        c += 1
-    r += 1
-print("Done.")
-~~~
-This would print all the values from 0 to 99 with a digit padding of 0
-when the value is less than 10. In that code above, the outer `while`
-isn't indented. Its body is indented 4 spaces. It has an inner `while`
-whose loop's body is indented 8 spaces.
-
-We now have a wider variety of expressions that include ones that
-evaluate to `True` and `False`, namely integer comparison checks
-and value equality checks, as well as the logical connectives
-`and` and `or`. These are expressed as binary operations in the
-language. We also have a unary `not` for logical negation.
-
-Because these are `<expn>` constructs, we can assign variables
-boolean values, and we can invent boolean predicate functions
-that return `True` or `False`.
-
-## Conditionals.
-
-There is a conditional "if-else" statement with the syntax:
-~~~ none
-    <stmt> ::= if <expn> : <nest> else : <nest>
-~~~
-Like the `while`, this takes a boolean expression, but here
-there are two indented blocks of code---the code that should
-be executed when the condition is `True`, and the code that
-should instead be executed when the condition is `False`.
-
-Like `while`, each of these blocks could have a `if-then`
-within their statements. They could also have a `while`.
-And furthermore, they could be nesetd inside an `while`
-or a `def`.
-
-## More types.
-
-We have changed the grammar so that expressions can be
-of type `str` and `int`. We allow value conversions using
-the `int` and `str` functions. There are also the literals
-`True` and `False` whose type is `bool` and the
-value `None`. ( I call this the `unit` type.)
-
-## More operations.
-
-We've included the left-associative `+`, `-`, `*`, `//`, and `%` operations.
-The precedence rules for these are as expected. Addition and subtraction
-operations are lower in precendence than multiplication and integer division.
-
-You'll be adding comparisons and logical operations to these.
-
-Having a wider variety of types means that some
-of the binary operations can have overloaded meaning. Already, 
-we can concatenate strings with `+` and repeat them with `*`. 
-We might also want to compare strings (and maybe even booleans)
-with `<`, etc. 
-
-Operator precedence rules are richer.
-The logical operations have the lowest precedence but, among them, logical
-negation with `not` is the highest, then `and`, and then `or`. Both `and` and
-`or` are left-associative binary operations.
-
-Sitting at a precedence level between the arithmetic and the logical operations
-are the comparison operations. **These have no associativity**, meaning
-(for example) you cannot express a condition like `a < b < c` in this
-language.  Rather than `a < b < c`, you are forced to use a combination
-of parentheses and the logical connectives to reason about the results of
-comparisons, writing this as `(a < b) and (b < c)`. Now, focusing on this
-example, it turns out also that you can write this as `a < b and b < c`.
-This is because comparisons have lower prcedecence than the arithmetic
-expressions that they typically reason about, and higher than the logical
-operations that string the comparisons together.
-
-This all means, for example, that
+Note that functions explicitly return a value, and the type of the value
+returned is given after the arrow notation `->`.
+Here instead is a procedure that appends a value to a string and prints it,
+conditionally including a comma in that output.
 ~~~ python
-x > y + z * 2 and not x * x < w or x == w
+def output_with_value(s : str, comma : bool, x : int) :
+    if comma:
+        print(s + ", " + str(x))
+    else:
+        print(s + str(x))
+    return
 ~~~
-should be parsed the same as
-~~~ python
-((x > (y + (z * 2))) and (not ((x * x) < w))) or (x == w)
-~~~
+Note that procedures are distinguished
+from functions by having no arrow in their `def` line.
+Function calls can appear within value expressions and procedure
+calls can appear as a statement line.
 
-We also have a variety of assignment/update operations, namely
-`=`, `+=`, and `-=`. Assignment statements are not expressions 
-and so do not yield a value.
-
-# Starter code
-
-The starting code for this assignment can be obtained by unpacking
-this ZIP file:
-
-* [snki-v2.zip](snki-v2.zip) - **Bison**/**Flex**-driven parser starting code. 
-
-It will unpack to yield the following code components:
-
-* `snki.{hh,cc}`: this is the driver of the code and defines `main`. It relies on a `Driver` object that houses the parser and lexer, and keeps a reference to the parsed program.
-
-* `snek-flex.{hh,ll}`: this is the Flex source code that defines the lexer. The lexer is assumed to be driven by a **Bison**-generated parser.
-
-* `snek-bison.{hh,yy}`: this is the **Bison** source code that defines the parser. For now it only defines stuff from Project 1. The parser ultimately builds and returns an AST for the source code it processes.
-
-* `snek-ast.{hh,cc}`: like the first assignment, this defines the AST node classes and implements their methods. Much of your work will involve laying out the additional classes for other syntactic constructs beyond the ones from Project 0.
-
-* `snek-util.{hh,cc}`: this contains a few spare utilities for reporting errors, including giving locations within the source code. Note: this has been changed from Project 0 to work with **Bison**'s code location mechanism.
-
-You can build the unextended parser with the command `make`. And then you
-can run the resulting program executable `snki` with a filename argument
-like so
+For all of this new syntax, we have the grammar production:
 ~~~ none
-./snki some-source-program.snk
+<type> ::= int | str | bool | unit
 ~~~
-just as you did with Project 0. When run, it
-builds the lexer and the parser, reads and processes the source code
-specified by the filename in the first argument to the Unix command,
-and then runs the interpreter.
+because data values in this language are either integers, strings, and
+boolean conditions. The `unit` type, inhabited by the value `None`, happens
+to be the "return type" of procedures.
 
-You can also include the `--dump` directive as one of the options.
-In this case, the program only outputs the AST of the code to the
-console without actually running it (in a manner similar to what
-was required for Project 0).
+Each of the formal parameter variables has an annotation that governs
+their use within a definition's body. Local variables can also be introduced
+within a block of statements. The syntax for variable introduction is
+given below
+~~~ none
+<stmt> ::= <nmdc> = <expn> EOLN
+~~~
+For example, here is a procedure that prints the prime numbers up to a
+given `number`.
+~~~ python
+def primesUpTo(number : int) :
+    print(2)
+    count : int = 2
+    skip : bool = True
+    while count <= number:
+        if not skip and isPrime(number):
+            print(count)
+        count += 1
+        skip = not skip
+    return
+~~~
+It introduces an integer `count` and a boolean flag `skip` that are used
+below their introduction.
 
-# The Assignment
+The effect of all of these changes is that every name used--- whether it
+is a function name, a procedure name, a parameter name, or a local variable
+name--- has type information attached to it.
 
-This assignment requires you to:
+(#) The Starter Code
 
-1. Add AST definitions for all the additional syntactic constructs, methods for printing out their syntax trees. These will be placed in the `snek-ast.*` files.
+* [**Download the starter code.**](tsnki.zip)
 
-2. Add token definitions for scanning **Snek** source code. The new token types will be placed in the appropriate section of the **Bison** specification file `snek-bison.yy`. The rules for scanning them will be placed in the Flex specification file `snek-flex.ll`.
+This assignment builds from the last assignment. There is an additional
+family of classes that need to be defined to support type checking and
+return type analysis. These are defined in `snek-check.hh`.
+They are
 
-3. Add parsing rules for handling all the **Snek** syntax shown in the grammar, plus any additional constructs you choose to provide.
+* `Type` : this is given by a C++ `typedef`. It represents a **Snek** program value type--- the integer type, the string type, the boolean type, and the unit `None` type.
 
-4. Finally, add methods for executing the code for each of the additions.
+* `Rtns` : this `typedef` represents the return behavior of a block of **Snek** code. It indicates whether a block definitely returns a value, or if executing its statements "falls through" because there is no `return`, or if both behaviors are possible.
 
-Below we give directions for changing the starter code, namely:
+* `SymT` and `SymInfo` : a table of information, and the information itself, that gives the type (and other things) about the local variables of a **Snek** definition's body.
 
-1. How to add new tokens to the `.yy` file.
+Along with this header file, the semantic checking code is defined in
+`snek-check.cc`.  Some of the code in this `.cc` file supports
+`Type`, `Rtns`, `SymInfo`, and `SymT`. The remaining code defines the
+AST methods `Prgm::chck`, `Defn::chck`, `Blck::chck`, the overrides of
+`Stmt::chck` for all subclasses of `Stmt`, and the overrides of
+`Expn::chck` for all subclasses of `Expn`. These methods' code aren't
+complete. Your assignment will be to finish the code for some of these `chck`
+methods.
 
-2. How to add rules for scanning tokens in the `.ll` file.
+The starter code lexes, parses, checks, and then runs a portion of
+the **Snek** language, showcasing some of the checking that you
+will need to perform. You'll want to modify your Project 1 code,
+upgrading it to mimic the semantic checking that the starter
+code performs, and then complete the suite of semantic checks
+outlined below. You also need to add function and procedure calls
+if you didn't already do that for Project 1.
 
-3. How to add new grammar variables to the `.yy` file.
+(#) The Assignment
 
-4. How to add new parse rules to the `.yy` file.
+Modify your code for Project 1 so that it parses this typed variant
+of **Snek** and then checks the code to make sure there are no
+obvious errors. The checks you will perform are to
 
-5. How to extend the interpreter for functions and procedures.
+* make sure names are defined
+* make sure expressions operate on data of the appropriate type
+* make sure calls pass the right number of arguments of the appropriate type
+* make sure every procedure and function returns
+* make sure every function returns a value of the appropriate type
+* make sure statements are reachable
+* make sure that the main script never returns
+
+The starter code has all the methods for `Expn::chck` written except
+for `FCll::chck`, the code that should check a function call. It has
+`Prgm::chck` and `Defn::chck` written.  It also has the methods
+`Ntro::chck`, `Pass::chck`, and `Prnt::chck` written. The last two are
+trivial, and then `Ntro` checking, `Defn `Lkup` checking can be used
+as your model for some of the others.
+
+Write `chck` for these classes:
+* `Blck`, the checking of a sequence of statements
+* `Asgn`, `MnEq`, and `PlEq`, three kinds of variable re-assignments
+* `Whle` and `IfEl`, the two *branch-y* "control flow" statements
+* `PCll` and `FCll`, procedure and function calls
+* `PRtn` and `FRtn`, returns from proceudres and funxtionx.
+If you didn't for Project 1, you'll also write:
+* `Defn::call` which serves `PCll::exec` and `FCll::eval`.
+
+(#) Our Checking Rules
+
+In lecture we formulated a notation for describing the rules for checking
+a program. These were laid out as *inference rules* for a judgement
+we'd like to make about code. We write these rules with each concluding
+judgement sitting under a horizontal line, putting above the line a set of
+conditions that, if met, allow us to make that judgement.
+
+(##) Checking expressions
+
+As a first example, we have the rule:
+$$
+\frac{
+\Delta; \Gamma \vdash e_1\ :\ \mathtt{int}
+\ \ \ \ \ 
+\Delta; \Gamma \vdash e_2\ :\ \mathtt{int}
+}
+{
+\Delta; \Gamma \vdash e_1 + e_2\ :\ \mathtt{int}
+}
+$$
+This tells us that we can conclude that the addition of two expressions
+$e_1$ and $e_2$ is okay, just so long as checking both $e_1$ and $e_2$
+is okay. Furthermore, if we can conclude that each expression will
+yield an integer when evaluated, then we are allowed to conclude that
+the sum expression will yield an integer.
+
+**Snek** uses the same `+` operator for string concatenation and so there
+is a similar rule for its use. The more general rule is
+$$
+\frac{
+\Delta; \Gamma \vdash e_1\ :\ \sigma
+\ \ \ \ \ 
+\Delta; \Gamma \vdash e_2\ :\ \sigma
+\ \ \ \ \ 
+\sigma \in \{ \mathtt{int} , \mathtt{str} \}
+}
+{
+\Delta; \Gamma \vdash e_1 + e_2\ :\ \sigma
+}
+$$
+
+In general we use the judgement
+$$
+\Delta; \Gamma \vdash e : \tau
+$$
+to express that an expression $e$ checks out okay and that, furthermore,
+it is known at compile time that it will yield a value of type $\tau$
+when it is evaluated.  The additional symbols $\Delta$ and $\Gamma$
+give program context information for the expression we are checking.
+$\Delta$ gives the type signatures of program definitions, and
+$\Gamma$ gives the types of variables whose scope includes the expression.
+So, for example
+~~~ python
+def sqr(n : int) -> int :
+    return n * n
+a : int = 3
+print(sqr(a) + (sqr(a+1)))
+~~~
+checks out because `a : int` and `sqr` takes an `int` and returns an `int`.
+The code below would not check out, for several reasons:
+~~~ python
+def qsr(n : int) -> bool :
+    return n * n
+a : str = "3"
+print(sqr(a) + (sqr(a+1)))
+~~~
+The sum `a+1` won't check because the left side is not an integer (or else
+because the right side is not a string). And the printed sum doesn't check
+out because its subexpressions don't check out.
+
+(###) &bull; Coding these expression checks
+
+In the code, within the file `snek-check.cc`, these expression checks are
+all implemented with methods with the signature:
+~~~
+    Type chck(Defs& defs, SymT& symt);
+~~~
+In that signature, `defs` is acting as $\Delta$ and `symt` is acting
+as `Gamma`. The methods of each `Expn` subclass each check their
+sub-expressions (if they have them), make sure they yield values of the
+appropriate type, and then return back the type of their AST's expression.
+For example, this code below mimics our rule for addition:
+~~~
+    Type Plus::chck(Defs& defs, SymT& symt) {
+        Type t1 = left->chck(defs, symt);
+        Type t2 = rght->chck(defs, symt);
+        if (is_int(t1) && is_int(t2)) {
+            return Type{IntTy {}};
+        }
+        if (is_str(t1) && is_str(t2)) {
+            return Type{StrTy {}};
+        }
+        throw SnekError {where(), "Type mismatch for plus!"};
+    }
+~~~
+And so what we see is that the type(s) returned by an `Expn::chck`
+corresponds to the $: \tau$ of our expression typing judgement.
+
+You might find it useful to take a look at `Ltrl::chck` and `Lkup::chck`
+to see other examples. In particular, checking variable lookups involves
+looking up the variable's name in `symt` under the current scope of
+the block being executed. Furthermore, it has the side effect of
+recording the symbol table information of the looked up `name` within
+that `Lkup` node's `name_info` attribute.
+
+(##) Checking statements and blocks of statements
+
+We also formulated rules for reasoning about the return behavior
+of code. We used the notation
+$$
+\Delta; \Gamma \vdash \mathcal{B} \Uparrow \rho
+$$
+to describe that the statements and subexpressions in a program block
+$\mathcal{B}$ check out, and also that executing the block has the
+return behavior $\rho$. We use the same notation for individual
+statements $\mathcal{s}$:
+$$
+\Delta; \Gamma \vdash \mathcal{s} \Uparrow \rho
+$$
+The return behavior, denoted $\rho$ above, is notated in three
+different ways, namely
+$$
+\rho ::= \mathtt{void}\ |\ \mathtt{void} + \tau\downarrow\ |\ \tau\downarrow
+$$
+In the above, $\tau$ is either `int`, `str`, `bool`, or `unit`.
+
+The behavior $\mathtt{void}$ corresponds to the behavior of a statement
+that does not return. Rather, the next statement below it is
+executed. The statements `pass`, `print`, a procedure call, and
+assignment do not return.  Here, for example, is a function `f` whose
+first three statements do not return, and whose last statement does
+return.
+~~~ python
+def f(x : int) -> int:
+    x = x + 1
+    print(x)
+    pass
+    return x * 42
+~~~
+Using our notation, we'd say that the first three $\Uparrow
+\mathtt{void}$ and the last one $\Uparrow \mathtt{int}\downarrow$.
+
+What about the third kind of return behavior? In our notation, it
+would be written $\mathtt{void} + \tau\downarrow$ for some type
+$\tau$. This notation would say that a statement definitely could
+return a value of type $\tau$ and definitely could not return.
+
+What kind of statement does that? An example is in the code of this function:
+~~~ python
+def g(x : int, y : int) -> int:
+    y = x + 1
+    if y > 42:
+        return x
+    else:
+        print(x)
+~~~
+If `x` is smaller than 42, the `else`
+clause of the `if` statement runs, and no value is returned by `g` in
+that case. In our notation, we would say that the `if` statement
+has the behavior $\Uparrow \mathtt{void} + \mathtt{int}\downarrow$
+because there is the possibility of it returning an integer whenever
+`x` is 42 or larger and there is also the possibility that it prints
+(and does not return) whenever `x` is smaller than 42.
+
+Our checking should complain about `g` because of the possibility
+that the code might not return an integer.
+
+Let's give two examples of statement and block checking rules.
+We have the rule
+$$
+\frac{
+\Delta; \Gamma \vdash e : \tau
+}
+{\Delta; \Gamma \vdash \mathtt{return}\ e \Uparrow \tau}
+$$
+This says that, if we can conclude that expression $e$ has
+type $\tau$, then the statement $\mathtt{return}\ e$ 
+returns a value of type $\tau$.
+
+We have the rule
+$$
+\frac{
+ \Gamma \vdash x:\tau\ \ \ \ \ \Delta; \Gamma \vdash e:\tau
+}
+{\Delta; \Gamma \vdash x = e \Uparrow \mathtt{void}}
+$$
+This says that an assignment statement checks out so long as the
+type of the right-hand side expression matches the type of
+the variable being assigned on the left-hand side. Furthermore,
+an assignment statement does not return.
+
+For blocks we have, for example, the rule
+$$
+\frac
+{
+\mathcal{s} \not\in \mbox{Intro}
+\ \ \
+\Delta; \Gamma \vdash \mathcal{s} \Uparrow \mathtt{void}
+\ \ \
+\Delta; \Gamma \vdash \mathcal{B} \Uparrow \mathtt{void} + \tau\downarrow
+}
+{
+\Delta; \Gamma \vdash \mathcal{s} ; \mathcal{B} \Uparrow  \mathtt{void} + \tau
+}
+$$
+This says that a block that starts with a statement $\mathcal{s}$ checks out
+fine when the statement doesn't return. This means that the block $\mathcal{B}$
+will be executed. Now, if that statement is not a variable introduction,
+we can check $\mathcal{B}$ using the same local variable context $\Gamma$.
+If that block checks out and we see that its code could either not return
+or could return a value of type $\tau$, then the whole block
+$\mathcal{s} ; \mathcal{B}$ can be concluded to have the same
+overall return behavior.
+
+(###) &bull; Coding statement and block checks
+
+If you look at the starter code, you'll see that we've added methods with
+signature
+~~~
+    Rtns chck(Rtns expd, Defs& defs, SymT& symt);
+~~~
+one for each subclass of `Stmt`, and also for `class Blck`.
+
+Like for expressions, `defs` serve as $\Delta$ and `symt` serves
+as $\Gamma$. And then both the return value of this method and the `expd`
+parameter that is handed to the method serve as $\rho$. These denote
+the return behavior of the statement (or sequence of statements in the case
+of `Blck`).
+
+There is some pragmatism here, somehow differing from our judgement inference
+rules, allowing us to direct the checking. When, for example, we are checking
+a function's body, we already know from its declaration what type the
+programmer expects its code to return. And so, when we check a `Defn`, we
+call `chck` on its body, passing it `def.returns()`.
+
+And so the expectation with `chck` is that, as we are checking each
+statement according to our judgment rules, we will see whether a
+statement has a return behavior that comports with the return behavior
+expected by `expd`. If, for example, the function we are checking
+returns an `int`, and when we check a loop and somewhere in its code
+it instead returns a `bool`, then we know that the code has a problem.
+If it sometimes resturns an `int` within the loop, and sometimes falls
+through, then things are okay, just so long as later statements definitively
+return an `int`.
+
+(##) &bull; Code that checks `print` and `pass`
+
+The type signature for `Stmt::chck` is
+~~~ C++
+Rtns Stmt::chck(Rtns expd, Defs& defs, SymT& symt);
+~~~
+This checks the typing and the return behavior of a statement, when
+told the type signatures and return behavior of the definitions `defs`
+and the local variable type info recorded in `symt`.
+
+This code corresponds to the statement judgement 
+$$
+\Delta; \Gamma \vdash \mathcal{s} \Uparrow \rho
+$$
+
+Here are some rules we devised for checking statements:
+$$
+\frac{}{\Delta; \Gamma \vdash \mbox{pass} \Uparrow \mbox{void}}
+$$
+$$
+\frac{
+\Delta; \Gamma \vdash e\ :\ \tau
+}
+{\Delta; \Gamma \vdash \mbox{print}(e) \Uparrow \mbox{void}}
+$$
+The first says that `pass` statements don't return.
+The second says that `print` statements don't return either,
+but that their expression $e$ had better pass our type checking.
+
+Here is the equivalent C++ code for the first two rules.
+~~~ C++
+Rtns Pass::chck(Rtns expd, Defs& defs, SymT& symt) {
+    return Rtns{Void {}};
+}
+
+Rtns Prnt::chck(Rtns expd, Defs& defs, SymT& symt) {
+    Type expn_ty = expn->chck(defs,symt);
+    return Rtns{Void {}};
+}
+~~~
+
+(##) &bull; Code that checks introductions `Ntro`
+
+In lecture we said that the typing rule for variable introductions is
+$$
+\frac
+{
+\Delta; \Gamma \vdash e : \tau
+\ \ \ \ 
+\Delta; \Gamma, x : \tau \vdash \mathcal{B} \Uparrow \rho
+}
+{
+\Delta; \Gamma \vdash x : \tau = e ; \mathcal{B} \Uparrow \rho
+}
+$$
+In saying this, we are making the assumption that new type
+designations of variables "stack up" to the right when we build
+$\Gamma$. And then we are assume that the "look-up" of a variables
+type within $\Gamma$ follows this stacking discipline. We scan through
+$\Gamma$ from right to left.
+
+Here is how this is coded in the starter code:
+~~~
+Rtns Ntro::chck([[maybe_unused]] Rtns expd,
+                [[maybe_unused]] Defs& defs, SymT& symt) {
+    Type t = expn->chck(defs, symt);
+    name_info = symt.add_locl(name, t);
+    if (t != type) {
+        throw SnekError {where(), "...Error raised!..."};
+    }
+    return Rtns {Void {}}; 
+}
+~~~
+We use the `SymT` method `add_locl`
+to put a new local variable named `name` onto the
+`symt` stack in the current scope.
+If you look at `Lkup::chck` you'll see that we then can look up
+the information about a `name` with `lookup_in_scope`.
+
+(##) &bull; Starter code that checks `Blck`
+
+We are asking you to get `Blck::chck` working in step 5. But also we are
+asking you to get `Stmt::chck` working for several statements in steps 1
+through 4. Because of this, we've written a somewhat bogus, but useful,
+`Blck::chck` method shown below:
+~~~
+Rtns Blck::chck(Rtns expd, Defs& defs, SymT& symt) {
+
+    symt.push_scope();
+    for (Stmt_ptr stmt : stmts) {
+        // FIX THIS!
+        Rtns stmt_rtns = stmt->chck(expd, defs, symt);
+    }
+    symt.pop_scope();
+
+    return Rtns {Void {}}; // FIX THIS!
+}
+~~~
+This, it turns out, gives us the needed stack-like behavior for the
+scoping rules of variable introductions. The key way this happens is
+with `push_scope` and `pop_scope`. If you consider that blocks of
+statements might be nested deeply (with `if:else` and with `while`),
+and that these might introduce variables, we want to limit the scopes
+of those variables to only within their nested body. That is what these
+push and pop calls do.
+
+What's missing in this code (and why it is bogus) is the check within the
+loop that some earlier statement doesn't definitely `return`. Doing so
+would only make later statements moot. They would never get executed.
+
+You'll fix this in Step 5.
+
+(##) Checking the whole program
+
+We have the two judgements
+$$
+\vdash \mathcal{P}\ \mbox{ok} \ \ \ \ \Delta \vdash \mathcal{d}\ \mbox{ok}
+$$
+The right judgement describes whether a function definiton $d$ checks out.
+We need to know the type signatures of all the functions, as given by
+$\Delta$, to reach this judgement. The left judgement describes
+whether a program $\mathcal{P}$ checks out. A program is modeled as
+$$
+\mathcal{P} = d_1 \ldots d_k\ \mathcal{M}
+$$
+It is just a series of definitions $d_1 \ldots d_k$ followed by a
+main script block $\mathcal{M}$.
+We have the rule
+$$
+\frac
+{\Delta(\mathcal{P}) \vdash d_1\ \mbox{ok}
+\ \ \ \cdots \ \ \ 
+\Delta(\mathcal{P}) \vdash d_k\ \mbox{ok}
+\ \ \ \ 
+\Delta(\mathcal{P}); \cdot \vdash \mathcal{M} \Uparrow \mbox{void}}
+{\vdash d_1 \ldots d_k\ \mathcal{M} \ \mbox{ok}} 
+$$
+This says that the program checks out okay if its definitions
+$d_1 \ldots d_k$ each check out, if its main script $\mathcal{M}$
+checks out, and if none of the statements in $\mathcal{M}$ return.
+
+(###) &bull; Coding whole-program checking
+
+These rules are coded up in `snek-check.cc` under the method definitions
+~~~
+void Prgm::chck(void) { ... }
+void Defn::chck(Defs& defs) { ... }
+~~~
+Check these two out!
+
+Checking a program just involves checking each of the program's definitions
+and then checking that the main script never returns. The starter code does
+this work already and is shown below:
+~~~ C++
+void Prgm::chck(void) {
+
+    // Check each definition.
+    for (std::pair<Name,Defn_ptr> dfpr : defs) {
+        Defn_ptr d = dfpr.second
+        d->chck(defs); 
+    }
+
+    // Check the main script.
+    Rtns rtns = main->chck(Rtns{Void {}}, defs, main_symt);
+
+    // Make sure the block never has a return statement.
+    if (!std::holds_alternative<Void>(rtns)) {
+        SnekError(main->where(), "Main script should not return.");
+    }
+}
+~~~
+The code for checking each definition has a similar quality
+~~~
+
+    // Check the body.
+    Rtns rtns = body->chck(Rtns{rety}, defs, symt);
+
+    // If function, make sure it returns in all cases.
+    if (std::holds_alternative<Void>(rtns) && rety != UnitTy {}) {
+        throw SnekError(body->where(), "Function body never returns.");
+    }
+    // if procedure, make sure it never returns a non-unit value.
+    if (std::holds_alternative<VoidOr>(rtns)) {
+        // Similar checks, but allowing returns and fall throughs....
+        ...
+    }
+}
+~~~
+What's hidden here is that, in the starter code, the symbol table `symt`
+already has the formal parameter's types loaded during parsing. The local
+context for the definition's body is read from the `def` line.
 
 ---
 
-# Coding Details
+(#) The coding steps for this assignment
 
-## 1. Specifying a grammar's tokens in **Bison**
+Below, we lead you though the coding of the assignment as a series of
+steps. With each step, we relate the C++ code you need to write to perform
+checking to the notation and rules from lecture that prescribe when a
+**Snek** program checks out okay.
 
-If you look at `snek-bison.yy`, you will see a section of code
-that defines the enumerated type for all the grammar's tokens, and also give
-the description of all the grammar's variables. These are needed by
-**Bison** so that it knows what kind of information (what C++ types) are
-communicated by the lexer, and also what the resulting types of
-the actions associated with each grammar production. Here, for example,
-is a summary of the token section:
+1. Check basic statments.
 
-~~~ none
-%token               EOFL  0  
-%token               EOLN
-%token               INDT
-%token               DEDT
-%token               PASS "pass"
-%token               PRNT "print"
-...
-%token               RPAR ")"
-%token <int>         NMBR
-%token <std::string> NAME
-%token <std::string> STRG
+2. Check returns.
+
+3. Check conditionals and loops.
+
+4. Check calls.
+
+5. Check blocks of statements.
+
+6. Handle function call and return within the interpreter. 
+
+We go through each of these below.
+
+# Step 1: checking basic statements
+
+Since we at least have a `Blck::chck` that scans through each of the
+statements and checks them, lets work on the statement checks.
+
+(###) &bull; Checking assignment statements
+
+Write `Asgn::chck` so that it mimics the inference rule we gave
+for assignment statements. You make a `chck` call to check the type
+of the right-hand side. After that you need to look at `symt` to see
+what info it has recorded for the type of its variable.
+This type had better match the type deduced by the call to `expn->chck`.
+
+(###) &bull; Checking update statements
+
+These are just `PlEq` and `MnEq`. The work is similar to what's done
+for `Asgn::chck`, but also what's done for `Plus::chck` and `Mnus::chck`.
+
+# Step 2: checking `return`
+
+(###) &bull; Checking function value return
+
+Let's examine a more interesting rule. I call this kind
+of statement a "function return." I name its AST node
+class `FRtn`. In your code for `FRtn::chck`, with signature
+~~~ C++
+Rtns FRtn::chck(Rtns expd, Defs& defs, SymT& symt)
 ~~~
-These lines ultimately define a enumerated type within the C++ code
-generated by **Bison**. What we are seeing is three kinds of tokens:
+you'll want to several things:
+1. You'll check the expression of the return, examine its type.
+2. You'll compare that type with the return behavior expected by `expd`.
+If there is a mismatch you raise an error. Otherwise, all is good,
+and you can end the method by returning the return behavior of this
+function return statement.
 
-1. Ones like `pass` and `)` that are standard lexemes.
+(###) &bull; Checking procedure return
 
-2. Ones lile `EOFL` and `EOLN` that are special characters handled by the lexer.
+Similar to the `FRtn` class, there is the `PRtn` class. I use this to
+model statements that return from a procedure---the `return` with no
+expression. We model this internally in **Snek** the way that
+Python does. We treat it as a `return None` and so it `Rtns {UnitTy {}}`.
+Use this when you write the code for `PRtn::chck`.
 
-3. Ones like `NMBR` and `NAME` that carry additional information.
+# Step 3: checking conditionals and loops
 
-In the Flex/**Bison** interface, all three kinds have an associated integer
-tag that is invented. This `enum` gets built as a **Bison**-generated file
-`snek-bison.tab.hh`, and looks like so:
-~~~ none
-    struct token
-    {
-      enum yytokentype
-      {
-        Token_EOFL = 0,
-        Token_EOLN = 258,
-        Token_INDT = 259,
-        Token_DEDT = 260,
-        Token_PASS = 261,
-        ...
-        Token_RPAR = 272,
-        Token_NMBR = 273,
-        Token_NAME = 274,
-        Token_STRG = 275
-      };
-    };
-~~~
-These end up being housed under the namespace `SLPY::Parser` but used
-to a large extent within the code for `SLPY::Lexer` as defined in
-`snek-flex.ll`.
-
-Within the `.yy` file, these tokens get mentioned within grammar production
-rules using their four-digit ALL CAPS. For example, here is the rule for
-`print` statements:
-~~~ none
-stmt:
-...
-| PRNT LPAR expn RPAR EOLN {
-    ...
-  }
-~~~
-In the above, we have elided some of the details with `...`.  The important
-thing to pay attention to in the above rule is that, instead of a grammar
-rule that says:
-~~~
-<stmt> ::= print ( <expn> ) EOLN
-~~~
-we instead use those four letter codes for each token like `print` and `(`.
-
-There is nothing truly special distingushing the tokens of kind #1 
-(like `PASS`, `LPAR`) and the tokens of kind #2 (like `EOLN`, `INDT`)
-as far as the Bison code is concerned. The only information
-we need to learn from the lexer when parsing is which token we saw. The
-integers associated with each (258 for `EOLN`, 261 for `PASS`) are all
-that **Bison** and **Flex** need to share for those kinds of tokens.
-In our declaration of the tokens of kind #1, we include the extra literal
-string (e.g. `"pass"` for `PASS`, `"("` for `LPAR`) just for clarity's sake.
-(And also, I believe **Bison** will let you use these literal strings in
-the gramar rules; I just haven't used that feature in the parse rules
-of the starter code.)
-
-For tokens of kind #2. like variable names (`NAME`) and literal values
-(`NMBR` and `STRG`) we need their information---a `std::string` for names
-and string literals, an `int` for number literals---because these tokens
-carry that additional information. The last lines of this token section
-gives the C++ type specification of that additional information:
-~~~ none
-%token <int>         NMBR
-%token <std::string> NAME
-%token <std::string> STRG
-~~~
-We will describe below how this additional information can be used in
-our parsing rules. For now I can give you a short preview. The **Bison**
-rule for parsing the assignment statement is given by:
-~~~ none
-stmt:
-  NAME ASGN expn EOLN {
-      $$ = Asgn_ptr { new Asgn {$1,$3,lexer.locate(@2)} };
-  }
-~~~
-This rule tells **Bison** that when the scanner finds a `NAME` followed by
-an `ASGN` at the start of a `<stmt>` (something like `count =`)
-consume those two tokens and then work to parse an `<expn>` followed by
-an end-of-line token. The C++ code instructs the parser to then create
-a new `Asgn` node with three pieces of information: the name of the variable,
-the parsed right-hand-side expression, and the location of the `=` operation.
-This code is just a standard C++ block but with special `$` designators that
-allow us to access the `NAME` and `expn` information, and to describe
-the new AST node being returned by the rule with `$$`.
-
-For our purpose here, the key thing to note is that **Bison** knows that
-the information attached with `NAME` in the first position of the rule
-is of type `std::string`. And that is because we told **Bison** this
-with the token declaration:
-~~~ none
-%token <std::string> NAME
-~~~
-And so that means that **Bison** will use the fact that the expression
-`$1` is of type `std::string` to generate the C++ parser code 
-`snek-bison.tab.cc`.  
-
-### Coding: adding tokens to `snek-bison.yy`:
-
-When you extend the parser to handle more grammar rules, some of
-those rules will require you to add more tokens to this list.
-For example, the conditional statement requires the tokens
-`if`, `:`, and `else`.  You'll want to add these here with new
-(capitalized, perhaps four-letter) names for their associated
-enumeration value.
-
-## 2. Adding more scanning rules to the lexer in **Flex**
-
-With each token you add to the `.yy` file, you'll need to also add
-a scanning rule to the lexer in `snek-flex.ll`. These rules are similar
-code to what we demonstrated in lab for Homework 1. They are just the regular
-expressions describing each token. 
-
-These rules are pretty simple for this assignment. They will just be the
-literal text. For example, the lines for the tokens `"pass"` and `"("` are
-given by:
-~~~ none
-"(" {
-    return issue(token::Token_LPAR, yytext, loc);
+Let's look at the rules for `if` and `while`. For the `if` statement we
+say that
+$$
+\frac{
+\Delta; \Gamma \vdash  e: \mathtt{bool}
+\ \ \ \
+\Delta; \Gamma \vdash  \mathcal{B}_1: \rho_1
+\ \ \ \ 
+\Delta; \Gamma \vdash  \mathcal{B}_2: \rho_2
 }
+{\Delta; \Gamma \vdash
+\mathtt{if}\ e: \mathcal{B}_1\ \mathtt{else}: \mathcal{B}_2 \Uparrow \rho_1 + \rho_2}
+$$
+This says that the condition of the `if` had better check out as a `bool`.
+And then whatever the behaviors of the two blocks are--- one might return,
+and the other might not, say--- the return behavior is the "sum" of their
+respective behaviors.
 
-...
-
-"pass" {
-    return issue(token::Token_PASS, yytext, loc);
+Here is the rule for the `while` statement:
+$$
+\frac{
+\Delta; \Gamma \vdash  e: \mathtt{bool}
+\ \ \ \
+\Delta; \Gamma \vdash  \mathcal{B}: \rho
 }
-~~~
-There is nothing too special to see here. It just requires you to
-write some code that is very boilerplate. In our `.ll` file, for
-convenience, we have set up these scanner firing rules so that
-we can say `token::Token_PASS` instead of 
-`Snek::Parser::token::Token_PASS`.
+{\Delta; \Gamma \vdash
+\mathtt{while}\ e: \mathcal{B} \Uparrow \mathtt{void} + \rho}
+$$
+This says that, again, the condition had better be of type `bool`.
+And then, if the body returns, since it might not run, the return
+behavior of the statement is either to not return (when the condition
+is immediately `False`), or to return. There could be other cases---
+the body might and might not return; the body might definitely not
+return--- and in lecture we defined the meaning of $\mathtt{void} + \rho$
+for all these cases.
 
-### Coding: adding token scanning to `snek-flex.ll`:
+(###) &bull; Coding `IfEl::chck` and `Whle::chck`
 
-For each token type that you introduce to `snek-bison.yy`, you'll
-need to add a scanner rule for matching its literal text and for
-issuing the associated C++ token. Just mimic the starter code
-I've given you and you should be fine here.
+Okay, these are significant. Have the C++ mimic the rules!
 
-## 3. Specifying a grammar's variables in **Bison**
+# Step 4: checking calls
 
-Just below the token section of `snek-bison.yy`, you will see a
-section of code that gives a summary description of all the grammar's
-variables.  These are told to **Bison** so that it learns the result types
-of all the actions associated with each grammar production rule.  Here
-is that variable section in the starter code:
+There are two kinds of `def` calls in **Snek**, given by the syntax:
 ~~~ none
-%type <Prgm_ptr> prgm
-%type <Blck_ptr> blck
-%type <Stmt_vec> stms
-%type <Stmt_ptr> stmt
-%type <Expn_ptr> expn
+<expn> ::= <name> ( <expn> , ... , <expn> )
+<stmt> ::= <name> ( <expn> , ... , <expn> )
 ~~~
-I hope it's clear what's going on here. The first line tells **Bison**
-that `<prgm>`-related production rules lead to parser actions
-that, having fired, return a (smart) pointer to a new AST node of type
-`Prgm`. A similar assertion is being made for `<blck>`, `<stmt>`, and
-`<expn>` production rules. We essentially saw the use of this information
-when we inspected the `.yy` code lines
-~~~ none
-stmt:
-  NAME ASGN expn EOLN {
-      $$ = Asgn_ptr { new Asgn {$1,$3,lexer.locate(@2)} };
-  }
+The first is a function call expression. It can be used within
+a calculation of some value. The call is made to any `def` whose
+type signature has a return type designated by `->`. The second
+is a procedure call statement. It can be used as a line in
+a block of statements. The call is made to any `def` whose
+type signature has no designated return type, and so it is
+to those whose bodies use a `return` statement, rather than
+one that explicitly returns a value.
+
+In the starter code, these are checked with the methods
+~~~ C++
+Type FCll::chck(Defs& defs, SymT& symt);
+Rtns PCll::chck(Rtns expd, Defs& defs, SymT& symt);
 ~~~
-Since **Bison** is parsing a `<stmt>` when it consumes source code of the
-form `<name> = <expn> EOLN`, the parser will return a new assignment
-statement AST node pointer. And the type `Asgn_ptr` happens to be
-copacetic with our specification line:
-~~~ none
-%type <Stmt_ptr> stmt
+For both of these, the type checking occurs as follows:
+
+1. Look up the name of the function/procedure within `defs`. This will yield a `Defn_ptr`. Access its symbol table that holds the formal parameter information.
+
+2. Check (using `get_frmls_size`) the number of parameters expected by this definition and see if it equals the number of arguments passed at this call site.
+
+3. Check each of the argument expressions passed at this call site and see whether the type matches the type signature as stored in the symbol table for that definition. Each parameter type can be accessed using `get_frml`.
+
+Lastly, for function call, we need `FCll::chck` to return the type of
+the return value of the function. This can also be found in the `Defn_ptr`
+of this function (obtained from parsing).
+
+And then, lastly, for procedure call, we need `PCll::chck` to verify that
+the name being called is actually a procedure. Recall that we, mimicking
+Python, model procedures as a `Defn` whose return type is `Type {UnitTy {}}`.
+Also for `PCll::chck`, we need to say that procedure calls themselves are
+not `return` statements. And so their return behavior is `Rtns {Void {}}`.
+
+(###) &bull; Coding `FCll::chck` and `PCll::chck`
+
+Again, you'll transcribe the above as C++. 
+
+# Step 5: checking a block's return behavior
+
+You've reached the last checking step. Recall that we wrote this rule for
+checking a block of statements:
+$$
+\frac
+{
+\mathcal{s} \not\in \mbox{Intro}
+\ \ \
+\Delta; \Gamma \vdash \mathcal{s} \Uparrow \rho_1
+\ \ \
+\Delta; \Gamma \vdash \mathcal{B} \Uparrow \rho_2
+\ \ \
+\rho_1 \rhd \rho_2 \not= \bot
+}
+{
+\Delta; \Gamma \vdash \mathcal{s} ; \mathcal{B} \Uparrow \rho_1 \rhd \rho_2
+}
+$$
+This rule governed the return behavior of the sequencing of statements.
+The entire aggregate behavior of the sequencing was encoded in the
+$\rhd$ operator. We devised the table
+$$
+\begin{array}{c|c|c|c}
+\rho_1 \rhd \rho_2                    & \mathtt{void} & \mathtt{void} + \tau & \tau\downarrow \\ \hline
+\mathtt{void}         & \mathtt{void} & \mathtt{void} + \tau\downarrow & \tau\downarrow \\ \hline
+\mathtt{void} + \tau  & \mathtt{void} + \tau\downarrow & \mathtt{void} + \tau\downarrow & \tau\downarrow \\ \hline
+\tau\downarrow                & \bot        & \bot               & \bot \\ \hline
+\end{array}
+$$
+The table says that, if the statement $\mathcal{s}$ definitely
+returns a value of type $\tau$, then it is an error (indicated by $\bot$)
+to have statements in a block following $\mathcal{s}$. This is the bottom
+row of the table. It also says that, should the statement have *some*
+route through its execution
+that definitely does not return (maybe it is an `if` statement
+where one of the blocks has no `return` in it), then $\mathcal{B}$
+can behave any way. In that case, the sequence returns a $\tau$ if the
+block does, the sequence behaves like $\mathtt{void} + \tau\downarrow$
+if either or both the statement or the block could. And the sequence
+does not return if both the statement and the block don't either.
+
+(###) &bull; Coding Step 5
+
+Your code for `Blck::chck` should mimic this $\rhd$ operator. It should
+scan the block's code, statement by statement, making sure that:
+
+1. If a statement *is not* the last statement, it "falls through" or it could "fall through". This means that its return behavior is `Rtns {Void {}}` or `Rtns {VoidOr {type}}` for the same `type` that is expected by `expd`.
+
+2. If a statement *is* the last statement, it definitely returns.
+
+# Step 6: making function and procedure calls run in `snki`
+
+Lastly, we return to the coding that was tabled in Project 1.
+If you never got `FCll::eval` and `PCll::exec` running in that project,
+here is your chance.
+
+I've already done some of the work for you in the starter code, but kicked
+the can a little further down the road. You will find these method definitions
+in `snek-ast.cc`:
 ~~~
-That is to say, if our parser builds something of type `Asgn_ptr`
-then that value can be used as a `Stmt_ptr` in the code because
-the `Asgn` class is derived from the `Stmt` class.
-
-Note that one of the specifications is not like the others namely
-~~~ none
-%type <Stmt_vec> stms
-~~~
-Rather than introduce a new AST node type for sequences of statements,
-we chose instead to use the type `std::vector<Stmt_ptr>`, which we
-aliased as `Stmt_vec`. Our parsing, however, was made less cumbersome
-by introducing a new variable `<stms>` and parsing it with the lines
-~~~ none
-stms:
-  stms stmt {
-      Stmt_vec ss = $1;
-      ss.push_back($2);
-      $$ = ss;
-  }
-| stmt {
-      Stmt_vec ss { };
-      ss.push_back($1);
-      $$ = ss;
-  }
-;
-~~~
-The C++ code for each rule manipulates a `std::vector<Stmt>`. In the
-base case of a single statement, we build a vector of length one. In the
-recursive case of two or more statements, we extend it with `push_back`
-to add the last statement parsed.
-
-The end effect of these two rules means that when a series of  
-`stmt` rules are parsed, each yielding a `Stmt_ptr` value, those
-statment pointers each get placed into a `Stmt_vec` object.
-
-### Coding: adding grammar variable specifications to `snek-bison.yy`:
-
-In extending the parser rules for **Snek**, you may find a need to
-introduce new left-hand sides to the grammar. For example, you may want
-to do this to process the formal parameters of functions in their
-`def` line. You may also want to do this for processing the actual
-parameter expressions passed as arguments in a function call
-(say, with a `std::vector>Name<` and a `std:vector<Expn_ptr>`).
-
-If you do need to introduce new variables in your **Bison** spec beyond the
-five we've listed, here is where you do it.
-
-## 4. Adding more parse rules in **Bison**.
-
-Finally, we get to the meaty part of the assignment: actually describing
-the code for parsing **Snek**. In a way, your coding work can start here.
-To describe that work, let's outline an example. Suppose you wanted to
-add a new parse rule to our parser. Then you do the following:
-
-1. Determine whether you need to introduce a new left-hand-side variable to the grammar production rules of the parser.
-
-2. If so, add a new `%type` line to the variable section, and start a new section of grammar rules for that variable. You then might also need to add a new AST subclass to the `snek-ast.hh` and `snek-ast.cc` files.
-
-3. If not, find the section for the variable in the existing list of grammar rules.
-
-4. Regardless, describe the right-hand-side of the production rule along with the C++ code that acts when that rule fires. This action will normally be the construction of some component of the AST, and that compoent should get returned by the C++ code using the `$$ = ...` directive. We talk about this more below.
-
-5. If the right-hand-side involves newly introduced tokens, then you need to add their definitions to the `%token` section with the appropriate (new, possibly four-letter, ALL CAPS) name.
-
-We've essentially described all the steps earlier excepting #4. Step #4 is
-where all the parsing magic happens and we work to demystify the coding
-here.
-
-In **Bison** the syntax of a language is specified by production rules, and
-then the parsing of code that follows that rule is given by some C++
-code in a corresponding action. The general syntax for a series of
-rules are of the form:
-~~~ none
-lhs:
-  rhs_1 { action_1 }
-| rhs_2 { action_2 }
-    ...
-| rhs_k { action_k }
-;
-~~~
-When we say this, we are describe a construct of the language with a variable
-`lhs` that corresponds to a grammar's production
-~~~ none
-<lhs> ::= rhs_1 | rhs_2 | ... | rhs_k
-~~~
-that is, there are `k` ways to expand the variable using the grammar.
-
-In **Bison**, 
-the variable `lhs` is declared with a `%type` line (as we described
-earlier). And then each `rhs_i` is made up of a series of **Bison** grammar
-variables and Flex-related tokens. For example, our starter code has these
-rules for statement syntax:
-~~~ none
-stmt:
-  NAME ASGN expn EOLN { ... }
-| PASS EOLN { ... }
-| PRNT LPAR expn RPAR EOLN { ... }
-;
-~~~
-These grammar rules correspond to the assignment, `pass`, and output statements
-in our language.
-
-A different right-hand-side can be seen with the rule
-~~~ none
-expn:
-  expn PLUS expn { ... }
-| expn MNUS expn { ... }
-| ...
-~~~
-This gives the rule for parsing additions and subtractions. There are 
-more rules just below those, but we've elided them with `...`. These
-describe other binary operations and other integer expression rules.
-
-We've adopted the convention throughout our **Bison** code that uses
-lower case four-letter words for variables and ALL CAP four-letter
-words for tokens. And so we are seeing, with each of these five
-example rules a mix of tokens and variables given as their
-ight-hand sides.
-
-In general, **Bison** allows you to write a bit of code that "fires"
-when a section of code is consumed by a parse that followed one
-a grammar rule. The code for each rule is suggested by `action_i`
-in the general format I described above. For the assignment statement
-we saw that the action is
-~~~ none
-      $$ = Asgn_ptr { new Asgn {$1,$3,lexer.locate(@2)} };
-~~~
-This basically tells **Bison** that, when it parses an assignment statement
-it should *return a value* (the `$$` assignment) that is a smart pointer
-to a newly allocated `Asgn` node. To build that node we need three pieces
-of information:
-
-1. the name of the program variable being assigned,
-
-2. the defining expression for (re-)assigning that variable, and
-
-3. the location in the code where the assignment occurs.
-
-The `$$` code within this C++ is **Bison**'s notation for *the result
-returned by this rule*. The `$1`, `$2`, and `$3` codes within this
-C++ are **Bison**'s notation for the information resulting from consuming
-the `NAME` token, the `ASGN` token, and the text that was parsed
-with the `expn`. The information attached to `NAME` was specified to
-be a `std::string` according to the `%token` line we gave for `NAME`.
-The information attached to the parse of `expn` was specified to be
-of type `Expn_ptr` by the `%type` rule we gave for `expn`.  And then
-also, it turns out, we can extract the source code location of the `=`
-token by using our lexer's `locate` method. The `@2` is **Bison**'s
-notation for accessing the source location (line and column info) 
-of the token `ASGN`. 
-
-Here is the action for parsing a sum:
-~~~ none
-$$ = Plus_ptr { new Plus {$1,$3,lexer.locate(@2)}
-~~~
-Its explanation is very similar.
-
-We have a very regimented structure in how we parse our 
-**Snek** code. We process and consume some of the source 
-code as a series of tokens provided by the lexer, and then
-we build an AST as a result. Hopefully you can get the gist
-of what the other rules and actions do in the other parts of
-the starting `.yy` file. They all contsruct and return a
-portion of the AST for each portion of the source code 
-that they parse.
-
-### Coding: add new parse rules to `snek-bison.yy`.
-
-Mimicking my structure, add the missing rules from the grammar
-to handle parsing of the entire **Snek** spec, and maybe
-also tackle some of the bonus constructs listed at the end of this
-document.
-
-### Coding: precedence and associativity
-
-You are introducing several new binary operators for comparison
-and for logic, and also the unary `not` operation. You'll need to
-tell **Bison** how they sit with the addition and multiplication
-operators. Currently, their precedence and associativity
-are declared in a section like so:
-~~~ none
-%left PLUS MNUS;
-%left TMES IMOD IDIV;
-~~~
-This tells **Bison** that `+` and `-` have lower precedence than
-`*`, `%`, and `//`. It says that all those operations are left
-associative. To include a unary operation in the hierarchy, you
-use the `%precedence` directive, something like `%precedence NOT;`
-if `NOT` is your token for `not`. To include "non-associative"
-binary operations (like `<`) you use the `%nonassoc` directive.
-  
-## 5. Making AST methods for `dump` and for the interpreter.
-
-You've already had experience in Project 0 of traversing the AST nodes
-you invent, namely with your `dump` and interpreter methods. You will
-need to continue that work here to test your parser. Each AST node class
-you invent should know how to dump its subtrees out to the console.
-And each AST node class should know its role within the interpreter
-(e.g. how `exec` or `eval` work for it).
-
-There are three major design changes to the interpreter.  
-A **Snek** program now consists of a series of function definitions
-along with a main block of script code that describes its
-execution. And then also, at any place in the code, there might
-be a call to a function (within an expression) or a call to
-a procedure (as a statement).  And so the first major change 
-in the interpreter from Project 0 is that the `eval` and the
-`exec` methods need access to the code for those top-level
-definitions to do their work. We call this the *global* or
-*top-level* context.
-
-And then also we have enhanced the language so that there are
-string, integer, and boolean values computed by expressions and
-by functions. This means that `eval` has to have the flexibility
-to return more than just `int`. This is the second major design
-change. 
-
-Finally, as a third major change, note that at any point during the
-execution of a procedure or function a `return` statement could be hit.
-This means that when we are executing a block of statements, we will
-need to immediately exit the code of the procedure or function we
-are currently executing. And, when this happens, we might be deeply
-digging through a block of statements, nested within a block of statements,
-etc. So this means that we'll essentially need to jump out of a series
-of recursive calls to `exec` back to the top-level execution of
-the defining block of that procedure or function. 
-
-To make this more clear, consider the program:
-~~~ none
-def is_prime(number):
-    if number <= 1:
-        return False
-    else:
-        divisor = 2
-        while divisor < number:
-            if number % divisor == 0:
-                return False
-            else:
-                divisor += 1
-        return True
-
-print(is_prime(int(input("Number? "))))
-~~~
-The parse tree for the body of `is_prime` will have the form
-~~~ none
-...
-    BLCK
-        IFEL
-            BLCK
-                RTRN 
-                    ...
-            BLCK
-                ASGN
-                    ...
-                WHLE
-                    BLCK
-                        IFEL
-                            BLCK
-==>                             RTRN
-                                    ...
-                RTRN
-~~~
-In particular, the `RTRN` line marked with `==>` is within
-the fourth nested block of code. (There are 4 `BLCK` descendants
-within the tree.) This means that when we handle the `exec`
-of that `return`, we will be in the middle of several recursive
-calls to `exec` methods (a total of seven; four for `BLCK`
-and three for the intervening statements; the eighth one is the
-`exec` for this `return`). And so each of these `exec` calls
-will need to report back to their callers that a `return` 
-statement was hit.
-
-Below we describe each of these coding issues.
-
-### Coding: add AST classes for each new construct
-
-I'll be brief here, because this mimics Project 0.
-The key additions to our Python-like language are `if-else`,
-`while`, `return`, and `def` along with boolean-valued expressions
-for doing value comparison and logic. This means that you'll need
-the AST classes for each of these constructs. And then, depending
-on what they do, they may need either an `exec` or an `eval`
-method. And then for `def`, which I see as a new kind of 
-construct (neither `Stmt` nor `Expn`) I encourage you to
-invent a `call` method.
-
-And then also you'll need to change `Pgrm` AST node so that, in addition
-to the `main` block of script code, it also houses all the functions and
-procedures introduced by `def` above the main script. This could be something
-like a `std::vector<Defn_ptr>` or maybe an `unordered_map`. I'll let you
-decide what you want to use to represent this information.
-Within `snek-ast.hh` I've included a `typedef` line for a new
-type called `Defs`. This can be the type used for that
-collection of function and procedure definitions. I've set it
-to be `std::vector<Defn_ptr>` but, again, you can make this
-what you want.
-
-### Coding `eval` to handle a variety of types of values
-
-Since expressions can evaluate to several different types of data,
-the `eval` method has a more complicated return type. Its type
-signature is now of the form
-~~~ none
-Valu eval( ..., const Ctxt& ctxt) { ... }
-~~~
-and then we have declared the type `Valu` as
-~~~  none
-typedef std::variant<int, bool, std::string, unit> Valu;
-~~~
-(The `unit` type is just `class None`.) This STL allows us to
-return several different kinds of values from `eval`, each 
-corresponding to the types of values possible within a
-**Snek** program. 
-
-If you are new to `std::variant`, you can have a crash course in
-it by looking at the code for `Plus::eval`, shown below:
-~~~ none
-    Valu lv = left->eval(defs,ctxt);
-    Valu rv = rght->eval(defs,ctxt);
-    if (std::holds_alternative<int>(lv) && std::holds_alternative<int>(rv)) {
-        int ln = std::get<int>(lv);
-        int rn = std::get<int>(rv);
-        return Valu {ln + rn};
-    } else if (std::holds_alternative<std::string>(lv)
-               && std::holds_alternative<std::string>(rv)) {
-        ... // similar code that handles std::string
+VOpt PCll::exec(const Defs& defs, Ctxt& ctxt) const {
+    if (defs.count(name) == 0) {
+        throw SnekError {where(), "...error!..."};
+    }
+    Valu v = defs.at(name)->call(defs, params, ctxt);
+    if (std::holds_alternative<unit>(v)) {
+        return std::nullopt;
     } else {
-        ... // code that raises an error
+        throw SnekError {where(), "...error!..."};
+    }        
+}
+
+Valu FCll::eval(const Defs& defs, const Ctxt& ctxt) const {
+    if (defs.count(name) == 0) {
+        throw SnekError { where(), "...error!..."};
     }
+    return defs.at(name)->call(defs, params, ctxt);
+}
 ~~~
-When we get a value back from evaluating a `Plus` node's two subtrees, we
-check with `holds_alternative<int>` to see whether they are holding the `int`
-variant. If so, we extract those two integer values with `get<int>`.
-And then we compute and return the sum by constructing an `int` variant of `Valu`
-with `return Valu {ln + rn};`.
+To complete the work here for Step 6, you need to write `Defn::call`.
+Its code should create a new local context and add the parameter
+bindings to it. To do this it needs to `eval` each of the parameter
+expressions, and add their (name, value) pairings to the local context.
 
-### Coding: have `eval` and `exec` handle function and procedure calls
+Once that's built it needs to then execute the body of the function.
+And then it needs to return whatever value gets returned by the body.
 
-We've modified the starter code so that the interpreter methods
-`exec` and `eval` all have access to the global context. We've done
-that by referencing a value of type `Defs` everywhere. This (as mentioned
-above) contains information about the collection of procedures
-that could be invoked within a statement block, and all the functions that
-can be called within an expression. For example, the full type signature
-for `eval` is
-~~~ none
-Valu eval(const Defs& defs, const Ctxt& ctxt) { ... }
-~~~
-The `defs` are just the subtree of `Prgm` that corresponds to all the
-`def` blocks.
+It's pretty simple but there *is* a lot going on under the covers.
+The lookup of names (in `Lkup::eval`) is based on their `SymInfo_ptr`
+data. This is what serves as the "key" for the dictionary provided
+as a `Ctxt`. The `SymInfo_ptr` data is stored with every variable's
+use in the AST. Setting local variables' values within a `Ctxt` is
+done by `SymInfo_ptr` within `Ntro::exec` and `Asgn::exec`.
 
-You'll need to figure out the method `exec` for the subclass of
-`Stmt` that invokes procedures and the method `eval`
-for the subclass of `Expn` that makes function calls. 
-Basically, you need to evaluate the parameter expressions
-that are being passed to the procedure/function, and then
-you'll need to build a new frame of local variables as a `Ctxt`
-for executing that procedure's/functions' block of code.
-And then you'll execute the block of code that defines the 
-function or procedure.
-
-It is in the execution of the procedure/function body
-that you need to be thoughftul about procedure/function return,
-describes just below.
-
-### Coding: have `exec` indicate whether a `return` was encountered
-
-Since executing a block of statements could lead to a `return`,
-and also since executing an `if-else` or a `while` loop might lead
-to a `return` we need a way to exit out of `exec` when we've
-encountered a `return` statement. The starter code has this 
-type signature for `exec` methods:
-~~~ none
-VOpt exec(const Defs& defs, Ctxt& ctxt) { ... }
-~~~
-The type `VOpt` is just a synonym for `std::optional<Valu>`.
-It allows us to *optionally* return a `Valu`.
-The design here is that, if we execute a block of code and encouter a
-`return` that seeks to return the value `rv` then we stop executing
-the block's statements and return it. 
-If instead no `return` was encountered and we "fall through" the
-block of code, then we `return std::nullopt`.
-This is summarized by the code for `Blck::exec` below:
-~~~ none
-    for (Stmt_ptr s : stmts) {
-        std::optional<Valu> rv = s->exec(defs,ctxt);
-        if (rv.has_value()) {
-            return rv;
-        } 
-    }
-    return std::nullopt;
-~~~
-When you extend the syntax with `while` and `if-then`, you'll need to
-be wary of whether a `return` is encountered within their blocks, and
-act accordingly. 
-
-And then also you'll invent the behavior of `exec` for the new
-AST nodes for function return statments and procedure return
-statements.
-
-# Exercises
-
-## Add `+=` and `-=`.
-
-We'll probably do one of these in lab together.
-
-## Add the `if`-`else` statement
-
-Here you will confront parsing the `INDT` and `DEDT` tokens. They aren't too bad.
-
-## Add comparison operations `<`, `==`
-
-You can add the others, too, but these are enough to express quite a bit.
-
-## Add the `while` statement.
-
-It's exciting to make your language's programs never halt!
-
-## Add logical operations `and`, `or`, `not`.
-
-Hey, why not?
-
-## Add `def` and procedure invocation.
-
-Here you are levelling up quite a bit. You need to figure out how to
-represent the components of a defined procedure when you invent `class Defn`.
-Each has some named formal parameters (maybe initially have them only take one or none). 
-It has some indented lines. 
-And then there should be a new `Stmt` type for calling one, sending it values for its parameters. 
-
-## Add `return` and function invocation
-
-Same as the above, but you'll now need an `Expn` type for calling a function, 
-you'll need a `return` statement, and you'll need a mechanism for getting a returned value.
-
-# BONUS exercises 
-
-Here are a few other things that you might consider.
-The last of these is pretty complex, especially
-if you haven't taken CSCI 384. If you want to do it,
-you should probably talk to me first about what's
-involved.
-
-The first two are the same as those we had in Project 0.
-
-## Add a conditional expression.
-
-Python allows the construct given by
-~~~ none
-<expn> ::= <expn> if <expn> else <expn> expression
-~~~
-Figure out its precedence in Python relative to the other operators,
-and parse these expressions too.
-
-## Allow `print` to take multiple arguments.
-
-Change the `print` syntax so that 0, 1, or more than one arguments
-can be passed to it, like suggested below
-~~~ none
-<expn> ::= print ( <expn> , ... , <expn> )  
-~~~
-When executed, the values should be printed on the same line, separated
-by a space. A call to `print()` should print an empty line.
-
-## Add the unary minus operation.
-
-Add a unary minus operator `-` to our grammar with
-~~~ none
-<expn> ::= - <expn>
-~~~
-This should have the highest precedence amongst the unary an binary
-operations. 
-
-## Add the `if` and the cascading `elif` statements.
-
-The language as defined forces every `if` to have a corresponding
-`else`.  This often requires a programmer to use a lot of `pass`
-statements when no `else` action is actually required. Change the
-syntax to include a statement
-~~~ none
-<stmt> ::= if <expn> : <stmt>
-~~~
-so that the syntax is less cumbersome.
-
-Python also provides "cascading" conditionals with `elif`.
-Add this construct to the language.
-
-Note that you can, if you like, parse these without inventing new
-AST node types. Instead, the parser can just rewrite these to use
-the existing AST node for `if-else`.  
-
-## Shortcircuit the `and` and `or`.
-
-I didn't say so above, but note that `and` and `or` are normally
-short-circuited in Python. Write the interpreter so that it does
-the same. This means that the second expression may not need to
-be evaluated if the first expression's value already resolves
-the condition (`False` for conjunction, `True` for disjunction). 
-
-## Add a `repeat-until` statement.
-
-Right all the things that are wrong with this world by adding a
-statement with the syntax
-~~~ none
-<stmt> ::= repeat: <nest> until <expn> EOLN
-~~~
-like what was in the language **Pascal**.
-This will make your instructor very very happy.
-
-## Allow nested functions and function values.
-
-We have made our lives easy by only allowing `def` to occur
-at the top level. We instead could have written the grammar
-like so:
-~~~
-<prgm> ::= <blck>
-<stmt> ::= def <name> ( <name> , ... , <name> ) : <nest>
-~~~
-This would suddenly make "higher order functions" possible
-because a programmer could then write
-~~~ python
-def curried_sum(x):
-    def added_to(y):
-        return x + y
-    return added_to
-
-addTen = curried_sum(10)
-print(addTen(32))
-~~~
-to print the value `42`.
-
-This means that function values need to be added to the `Valu` type.
-But representing them is complicated. We could call `curried_sum` like so:
-~~~ python
-addTen = curried_sum(10)
-addTwo = curried_sum(2)
-~~~
-and so that means that the function objects `addTen` and `addTwo` need to
-"carry around" their individual notions of `x` with them. This requires
-your function values to be *closures*. A function value needs to
-know the code of the function it represents, and it also needs reference
-to the frame of variables that was active when the function value was
-built.
-
-Doing this properly would eliminate the need for a `std::vector<Defn>` to be
-passed to the methods for executing statements and evaluating expressions,
-but it is conceptually trickier to do this.
-
-Compiling this kind of code is even trickier, and it makes sense that many
-compiled languages (like C) do not allow it.
+Here, then, when you set up the local context, you'll want to set
+the value of each formal parameter's variable in the same way for
+the new `Ctxt` you've created for this call.

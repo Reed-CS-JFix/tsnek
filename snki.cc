@@ -101,7 +101,16 @@ void Snek::Driver::run(void) {
     main->run();
 }
 
-// run
+
+// check
+//
+// Checks the Snek program.
+//
+void Snek::Driver::check(void) {
+    main->chck();
+}
+
+// dump
 //
 // Outputs the Snek program, either by depicting its AST, or by
 // a "pretty" version that mimics the original source code.
@@ -150,6 +159,7 @@ int main(int argc, char** argv) {
             if (dump) {
                 snek.dump(pretty);
             } else {
+                snek.check();
                 snek.run();
             }
             

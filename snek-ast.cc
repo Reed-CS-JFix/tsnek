@@ -13,6 +13,7 @@
 
 #include "snek-ast.hh"
 #include "snek-util.hh"
+#include "snek-check.hh"
 
 //
 // snek-ast.cc
@@ -34,40 +35,58 @@
 //
 
 AST::AST(Locn lo) : locn {lo} { }
-
-Prgm::Prgm(Defs ds, Blck_ptr mn, Locn lo) : AST {lo}, defs {ds}, main {mn} { }
-Defn::Defn(Locn lo) : AST {lo} { } // This will be changed!
+//
+Prgm::Prgm(Defs ds, Blck_ptr mn, Locn lo) :
+    AST {lo}, defs {ds}, main {mn}, main_symt {} { }
+Defn::Defn(Name nm, SymT sy, Type rt, Blck_ptr bd, Locn lo) :
+    AST {lo}, name {nm}, symt {sy}, rety {rt}, body {bd} { }
 Stmt::Stmt(Locn lo) : AST {lo} { }
 //
-Asgn::Asgn(Name x, Expn_ptr e, Locn l) : Stmt {l}, name {x}, expn {e} { }
-Prnt::Prnt(Expn_ptr e, Locn l) : Stmt {l}, expn {e} { }
+Ntro::Ntro(Name x, Type t, Expn_ptr e, Locn l) :
+    Stmt {l}, name {x}, name_info {nullptr}, type {t}, expn {e} { }
+Asgn::Asgn(Name x, Expn_ptr e, Locn l) :
+    Stmt {l}, name {x}, name_info {nullptr}, expn {e} { }
+PlEq::PlEq(Name x, Expn_ptr e, Locn l) :
+    Stmt {l}, name {x}, name_info {nullptr}, expn {e} { }
+MnEq::MnEq(Name x, Expn_ptr e, Locn l) :
+    Stmt {l}, name {x}, name_info {nullptr}, expn {e} { }
+Prnt::Prnt(Expn_vec es, Locn l) : Stmt {l}, exps {es} { }
 Pass::Pass(Locn l) : Stmt {l} { }
+IfEl::IfEl(Expn_ptr cd, Blck_ptr tb, Blck_ptr eb, Locn l) :
+    Stmt {l}, cndn {cd}, then_blck {tb}, else_blck {eb} { }
+Whle::Whle(Expn_ptr cd, Blck_ptr bd, Locn l) :
+    Stmt {l}, cndn {cd}, blck {bd} { }
+PCll::PCll(Name nm, Expn_vec ps, Locn l) : Stmt {l}, name {nm}, params {ps} { }
+PRtn::PRtn(Locn l) : Stmt {l} { }
+FRtn::FRtn(Expn_ptr e, Locn l) : Stmt {l}, expn {e} { }
+//
 Blck::Blck(Stmt_vec ss, Locn lo) : AST {lo}, stmts {ss} { }
-
+//
 Expn::Expn(Locn lo) : AST {lo} { }
 //
+FCll::FCll(Name nm, Expn_vec ps, Locn l) : Expn {l}, name {nm}, params {ps} { }
 BiOp::BiOp(std::string op, Expn_ptr lf, Expn_ptr rg, Locn lo)
   : Expn {lo}, oper {op}, left {lf}, rght {rg}, sigs {} { }
 Plus::Plus(Expn_ptr lf, Expn_ptr rg, Locn lo)
 : BiOp{"+", lf, rg, lo} {
     // Add two integers.
-    addRule("int", "int", [](Valu l, Valu r) {
+    addRule("int", "int", "int", [](Valu l, Valu r) {
         return Valu {std::get<int>(l) + std::get<int>(r)};
     });
     // Concatenate two strings.
-    addRule("str","str", [](Valu l, Valu r) {
+    addRule("str","str", "str", [](Valu l, Valu r) {
         return Valu {std::get<std::string>(l) + std::get<std::string>(r)};
     });
 }
 Tmes::Tmes(Expn_ptr lf, Expn_ptr rg, Locn lo)
 : BiOp{"*", lf, rg, lo} {
     // Multiply two integers.
-    addRule("int", "int",
+    addRule("int", "int", "int", 
             [](Valu l, Valu r) {
                 return Valu {std::get<int>(l) * std::get<int>(r)};
         });
     // Repeat a string an integer number of times.
-    addRule("int", "str", 
+    addRule("int", "str", "str", 
             [](Valu l, Valu r) {
                 int n = std::get<int>(l);
                 std::string s = std::get<std::string>(r);
@@ -76,7 +95,7 @@ Tmes::Tmes(Expn_ptr lf, Expn_ptr rg, Locn lo)
                 return Valu {t};
             });
     // Same.
-    addRule("str", "int", 
+    addRule("str", "int", "str", 
             [](Valu l, Valu r) {
                 int n = std::get<int>(r);
                 std::string s = std::get<std::string>(l);
@@ -88,7 +107,7 @@ Tmes::Tmes(Expn_ptr lf, Expn_ptr rg, Locn lo)
 Mnus::Mnus(Expn_ptr lf, Expn_ptr rg, Locn lo)
 : BiOp{"-", lf, rg, lo} {
     // Subtract two integers.
-    addRule("int", "int", 
+    addRule("int", "int", "int", 
             [](Valu l, Valu r) {
                 return Valu {std::get<int>(l) - std::get<int>(r)};
             });
@@ -96,7 +115,7 @@ Mnus::Mnus(Expn_ptr lf, Expn_ptr rg, Locn lo)
 IDiv::IDiv(Expn_ptr lf, Expn_ptr rg, Locn lo)
 : BiOp{"//", lf, rg, lo} {
     // Compute the quotient of two integers.
-    addRule("int", "int",
+    addRule("int", "int", "int", 
             [this](Valu l, Valu r) {
                 int lv = std::get<int>(l);
                 int rv = std::get<int>(r);
@@ -113,7 +132,7 @@ IDiv::IDiv(Expn_ptr lf, Expn_ptr rg, Locn lo)
 IMod::IMod(Expn_ptr lf, Expn_ptr rg, Locn lo)
 : BiOp{"%", lf, rg, lo} {
     // Compute the remainder due to an integer division.
-    addRule("int", "int",
+    addRule("int", "int", "int", 
         [this](Valu l, Valu r) {
         int lv = std::get<int>(l);
         int rv = std::get<int>(r);
@@ -128,14 +147,75 @@ IMod::IMod(Expn_ptr lf, Expn_ptr rg, Locn lo)
         };
     });
 }
+Conj::Conj(Expn_ptr lf, Expn_ptr rg, Locn lo)
+: BiOp{"and", lf, rg, lo} {
+    // Compute logical and of two bools.
+    addRule("bool", "bool", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<bool>(l) && std::get<bool>(r)};
+        });
+}
+Disj::Disj(Expn_ptr lf, Expn_ptr rg, Locn lo)
+: BiOp{"or", lf, rg, lo} {
+    // Compute logical or of two bools.
+    addRule("bool", "bool", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<bool>(l) || std::get<bool>(r)};
+        });
+}
+Less::Less(Expn_ptr lf, Expn_ptr rg, Locn lo)
+: BiOp{"<", lf, rg, lo} {
+    // Compare two integers.
+    addRule("int", "int", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<int>(l) < std::get<int>(r)};
+        });
+    // Compare two strings.
+    addRule("str", "str", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<std::string>(l) < std::get<std::string>(r)};
+        });
+}
+LsEq::LsEq(Expn_ptr lf, Expn_ptr rg, Locn lo)
+: BiOp{"<=", lf, rg, lo} {
+    // Compare two integers.
+    addRule("int", "int", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<int>(l) <= std::get<int>(r)};
+        });
+    // Compare two strings.
+    addRule("str", "str", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<std::string>(l) <= std::get<std::string>(r)};
+        });
+}
+Equl::Equl(Expn_ptr lf, Expn_ptr rg, Locn lo)
+: BiOp{"==", lf, rg, lo} {
+    addRule("int", "int", "bool", 
+            [](Valu l, Valu r) {
+                bool b = std::get<int>(l) == std::get<int>(r);
+                return Valu {b};
+        });
+    addRule("str", "str", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<std::string>(l) == std::get<std::string>(r)};
+        });
+    addRule("bool", "bool", "bool", 
+            [](Valu l, Valu r) {
+                return Valu {std::get<bool>(l) == std::get<bool>(r)};
+        });
+}
 //
 Ltrl::Ltrl(Valu vl, Locn lo) : Expn {lo}, valu {vl} { }
-Lkup::Lkup(Name nm, Locn lo) : Expn {lo}, name {nm} { }
+Lkup::Lkup(Name nm, Locn lo) :
+    Expn {lo}, name {nm}, name_info {nullptr} { }
 //
 Inpt::Inpt(Expn_ptr e, Locn lo) : Expn {lo}, prpt {e} { }
 IntC::IntC(Expn_ptr e, Locn lo) : Expn {lo}, expn {e} { }
 StrC::StrC(Expn_ptr e, Locn lo) : Expn {lo}, expn {e} { }
 SLen::SLen(Expn_ptr e, Locn lo) : Expn {lo}, expn {e} { }
+LNeg::LNeg(Expn_ptr e, Locn lo) : Expn {lo}, expn {e} { }
+INeg::INeg(Expn_ptr e, Locn lo) : Expn {lo}, expn {e} { }
 
 //
 // Prgm::run, Blck::exec, Stmt:: exec
@@ -150,6 +230,34 @@ void Prgm::run(void) const {
     main->exec(defs, main_ctxt);
 }
 
+Valu Defn::call(const Defs& defs,
+                const Expn_vec& exps,
+                const Ctxt& ctxt) const {
+    // ***
+    // FIX THIS!
+
+    /*
+     * Code here should create a local context, add the parameter
+     * bindings (evaluate each of the `exps`) to it, then execute
+     * the body of the function. It then needs to return whatever
+     * value gets returned by the body.
+     *
+     * Note that lookup of names (in Lkup::eval) is based on their
+     * SymInfo_ptr data. This is what serves as the "key" for the
+     * dictionary provided as a Ctxt. The SymInfo_ptr data is stored
+     * with every variable's use in the AST. You'll also see that
+     * setting variable's values within Ctxt is done by SymInfo_ptr
+     * within Ntro::exec and Asgn::exec.
+     */
+    (void)ctxt;
+    (void)exps;
+    (void)defs;
+    
+    // FIX THIS!
+    // ***
+    return Valu {None}; // FIX THIS!
+}
+
 VOpt Blck::exec(const Defs& defs, Ctxt& ctxt) const {
     // Execute each statement of a block.
     for (Stmt_ptr s : stmts) {
@@ -161,9 +269,43 @@ VOpt Blck::exec(const Defs& defs, Ctxt& ctxt) const {
     return std::nullopt;
 }
 
+VOpt Ntro::exec(const Defs& defs, Ctxt& ctxt) const {
+    // Add or update the context with this named variable's new value.
+    ctxt[name_info] = expn->eval(defs, ctxt);
+    return std::nullopt;
+}
+
 VOpt Asgn::exec(const Defs& defs, Ctxt& ctxt) const {
     // Add or update the context with this named variable's new value.
-    ctxt[name] = expn->eval(defs, ctxt);
+    ctxt[name_info] = expn->eval(defs, ctxt);
+    return std::nullopt;
+}
+
+VOpt PlEq::exec(const Defs& defs, Ctxt& ctxt) const {
+    // Add or update the context with this named variable's new value.
+    Valu v = ctxt.at(name_info);
+    Valu ev = expn->eval(defs, ctxt);
+    if (std::holds_alternative<int>(v)) {
+        int i = std::get<int>(v);
+        int ei = std::get<int>(ev);
+        ctxt[name_info] = Valu {i + ei};
+    } else if (std::holds_alternative<std::string>(v)) {
+        std::string s = std::get<std::string>(v);
+        std::string es = std::get<std::string>(ev);
+        ctxt[name_info] = Valu {s + es};
+    }
+    return std::nullopt;
+}
+
+VOpt MnEq::exec(const Defs& defs, Ctxt& ctxt) const {
+    // Add or update the context with this named variable's new value.
+    Valu v = ctxt.at(name_info);
+    Valu ev = expn->eval(defs, ctxt);
+    if (std::holds_alternative<int>(v)) {
+        int i = std::get<int>(v);
+        int ei = std::get<int>(ev);
+        ctxt[name_info] = Valu {i - ei};
+    }
     return std::nullopt;
 }
 
@@ -174,15 +316,82 @@ VOpt Pass::exec([[maybe_unused]]const Defs& defs, [[maybe_unused]]Ctxt& ctxt) co
   
 VOpt Prnt::exec(const Defs& defs, Ctxt& ctxt) const {
     // Output the value of the expression to STDOUT.
-    std::cout << to_string(expn->eval(defs, ctxt)) << std::endl;
+    bool first = true;
+    for (Expn_ptr e: exps) {
+        if (!first) {
+            std::cout << " ";
+        }
+        std::cout << to_string(e->eval(defs, ctxt));
+        first = false;
+    }
+    std::cout << std::endl;
     return std::nullopt;
 }
+
+VOpt IfEl::exec(const Defs& defs, Ctxt& ctxt) const {
+    Valu v = cndn->eval(defs, ctxt);
+    bool bv = std::get<bool>(v);
+    if (bv) {
+        return then_blck->exec(defs, ctxt);
+    } else {
+        return else_blck->exec(defs, ctxt);
+    }
+}
+
+VOpt Whle::exec(const Defs& defs, Ctxt& ctxt) const {
+    Valu v = cndn->eval(defs, ctxt);
+    bool bv = std::get<bool>(v);
+    while (bv) {
+        VOpt rt = blck->exec(defs, ctxt);
+        if (rt.has_value()) {
+            return rt;
+        }
+        v = cndn->eval(defs, ctxt);
+        bv = std::get<bool>(v);
+    }
+    return std::nullopt;
+}
+
+VOpt PCll::exec(const Defs& defs, Ctxt& ctxt) const {
+    if (defs.count(name) == 0) {
+        throw SnekError {
+            where(), "Run-time error: unknown procedure '" + name +"'."
+        };
+    }
+    Valu v = defs.at(name)->call(defs, params, ctxt);
+    if (std::holds_alternative<unit>(v)) {
+        return std::nullopt;
+    } else {
+        throw SnekError {
+            where(), "Run-time error: function '" + name +"' called as procedure."
+        };
+    }        
+}
+
+VOpt FRtn::exec(const Defs& defs, Ctxt& ctxt) const {
+    Valu v = expn->eval(defs, ctxt);
+    return VOpt {v};
+}
+
+VOpt PRtn::exec([[maybe_unused]]const Defs& defs, [[maybe_unused]]Ctxt& ctxt) const {
+    return VOpt {Valu {None}};
+}
+
 
 //
 // Expn:: eval
 //
 // - Evaluate a Snek expression within the runtime context to calculate
 //   its resulting Snek value.
+
+Valu FCll::eval(const Defs& defs, const Ctxt& ctxt) const {
+    if (defs.count(name) == 0) {
+        throw SnekError {
+            where(), "Run-time error: unknown function '" + name +"'."
+        };
+    }
+    return defs.at(name)->call(defs, params, ctxt);
+}
 
 //
 // BiOp::eval relies heavily on...
@@ -196,16 +405,17 @@ VOpt Prnt::exec(const Defs& defs, Ctxt& ctxt) const {
 //   of "signatures" for that binary operation. It supports the 
 //   `BiOp::eval` method's operator dispatch.
 //
-//  For example, we might define string repetition as taking 
-//  an integer and a string, and so we would add a rule for "int", "str"
-//  and the function attached to it would concatenate a string several
-//  times.
+//  For example, we might define string repetition as taking an
+//  integer and a string, and so we would add a rule for "int", "str",
+//  returning "str, and the function attached to it would concatenate
+//  a string several times.
 //
 void BiOp::addRule(std::string lt, 
                    std::string rt,
+                   std::string ty,
                    std::function<Valu(Valu,Valu)> ef) {
-    std::string lt_rt = lt + "," + rt;
-    sigs.insert({lt_rt, ef});
+    std::string lt_rt = lt + "*" + rt;
+    sigs.insert({lt_rt, std::pair {ty, ef}});
 }
 //
 Valu BiOp::eval(const Defs& defs, const Ctxt& ctxt) const {
@@ -217,11 +427,11 @@ Valu BiOp::eval(const Defs& defs, const Ctxt& ctxt) const {
     // Determine their resulting value's types.
     std::string lt = ty_string(lv);
     std::string rt = ty_string(rv);
-    std::string lt_rt = lt + "," + rt;
+    std::string lt_rt = lt + "*" + rt;
 
     // "Dispatch" the rule for evaluation according to the types.
     if (sigs.count(lt_rt) > 0) {
-        return sigs.at(lt_rt)(lv,rv);
+        return (sigs.at(lt_rt).second)(lv,rv);
     }
 
     throw SnekError {
@@ -236,11 +446,12 @@ Valu Ltrl::eval([[maybe_unused]]const Defs& defs, [[maybe_unused]]const Ctxt& ct
 
 Valu Lkup::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
     // Look up the named variable within the current context.
-    if (ctxt.count(name) > 0) {
-        return ctxt.at(name);
+    if (ctxt.count(name_info) > 0) {
+        return ctxt.at(name_info);
     } else {
         throw SnekError { where(), "Run-time error: variable '" + name +"' not defined."};
     }
+    
 }
 
 Valu Inpt::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
@@ -285,6 +496,18 @@ Valu SLen::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
     }
 }
 
+Valu INeg::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
+    Valu v = expn->eval(defs, ctxt);
+    int iv = std::get<int>(v);
+    return Valu {-iv};
+}
+
+Valu LNeg::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
+    Valu v = expn->eval(defs, ctxt);
+    bool bv = std::get<bool>(v);
+    return Valu {!bv};
+}
+
 // * * * * *
 //
 // AST::output
@@ -298,12 +521,29 @@ Valu SLen::eval([[maybe_unused]]const Defs& defs, const Ctxt& ctxt) const {
 //
 
 void Prgm::output(std::ostream& os) const {
+    for (std::pair<Name,Defn_ptr> dfpr : defs) {
+        dfpr.second->output(os);
+    }
     main->output(os, "");
 }
 
 void Defn::output(std::ostream& os) const {
-    // Your code goes here.
-    os << "def" << std::endl; // BOGUS to shut up the compiler warning. 
+    os << "def " << name << "(";
+    bool first = true;
+    for (unsigned int i = 0; i < arity(); i++) {
+        if (!first) {
+            os << ", ";
+        }
+        SymInfo_ptr xi = formal(i);
+        os << xi->name << " : " << type_name(xi->type);
+        first = false;
+    }
+    if (is_unit(returns())) {
+        os << "):" << std::endl;
+    } else {
+        os << ") -> " << type_name(returns()) << ":" << std::endl;
+    }
+    body->output(os, "    ");
 }
 
 void Blck::output(std::ostream& os, std::string indent) const {
@@ -312,9 +552,30 @@ void Blck::output(std::ostream& os, std::string indent) const {
     }
 }
 
+void Ntro::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << name << " : " << type_name(type) <<" = ";
+    expn->output(os);
+    os << std::endl;
+}
+
 void Asgn::output(std::ostream& os, std::string indent) const {
     os << indent;
     os << name << " = ";
+    expn->output(os);
+    os << std::endl;
+}
+
+void PlEq::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << name << " += ";
+    expn->output(os);
+    os << std::endl;
+}
+
+void MnEq::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << name << " -= ";
     expn->output(os);
     os << std::endl;
 }
@@ -327,15 +588,84 @@ void Prnt::output(std::ostream& os, std::string indent) const {
     os << indent;
     os << "print";
     os << "(";
-    expn->output(os);
+    bool first = true;
+    for (Expn_ptr e : exps) {
+        if (!first) {
+            os << ", ";
+        }
+        e->output(os);
+        first = false;
+    }
     os << ")";
     os << std::endl;
 }
 
+void IfEl::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << "if ";
+    cndn->output(os);
+    os << ":" << std::endl;
+    then_blck->output(os, indent + "    ");
+    os << indent << "else:" << std::endl;
+    else_blck->output(os, indent + "    ");
+}
+
+void Whle::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << "while ";
+    cndn->output(os);
+    os << ":" << std::endl;
+    blck->output(os, indent + "    ");
+}
+
+void PRtn::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << "return";
+    os << std::endl; 
+}
+
+void FRtn::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << "return ";
+    expn->output(os);
+    os << std::endl; 
+}
+
+void PCll::output(std::ostream& os, std::string indent) const {
+    os << indent;
+    os << name;
+    os << "(";
+    bool first = true;
+    for (Expn_ptr e : params) {
+        if (!first) {
+            os << ", ";
+        }
+        e->output(os);
+        first = false;
+    }
+    os << ")";
+    os << std::endl;
+}
+
+void FCll::output(std::ostream& os) const {
+    os << name << "(";
+    bool first = true;
+    for (Expn_ptr e : params) {
+        if (first) {
+            os << ",";
+        }
+        e->output(os);
+        first = false;
+    }
+    os << ")";
+}
+
 void BiOp::output(std::ostream& os) const {
     os << "(";
-    left->output(os);
+    left->output(os); 
+    os << " ";
     os << oper;
+    os << " ";
     rght->output(os);
     os << ")";
 }
@@ -368,6 +698,18 @@ void StrC::output(std::ostream& os) const {
 
 void SLen::output(std::ostream& os) const {
     os << "len(";
+    expn->output(os);
+    os << ")";
+}
+
+void LNeg::output(std::ostream& os) const {
+    os << "(not ";
+    expn->output(os);
+    os << ")";
+}
+
+void INeg::output(std::ostream& os) const {
+    os << "(- ";
     expn->output(os);
     os << ")";
 }
@@ -406,8 +748,27 @@ void Blck::dump(std::ostream& os, std::string indent) const {
     }
 }
 
+void Ntro::dump(std::ostream& os, std::string indent) const {
+    os << indent << "Ntro" << std::endl;
+    os << indent+"    " << name << std::endl;
+    os << indent+"    " << type_name(type) << std::endl;
+    expn->dump(os, indent+"    ");
+}
+
 void Asgn::dump(std::ostream& os, std::string indent) const {
     os << indent << "Asgn" << std::endl;
+    os << indent+"    " << name << std::endl;
+    expn->dump(os, indent+"    ");
+}
+
+void PlEq::dump(std::ostream& os, std::string indent) const {
+    os << indent << "PlEq" << std::endl;
+    os << indent+"    " << name << std::endl;
+    expn->dump(os, indent+"    ");
+}
+
+void MnEq::dump(std::ostream& os, std::string indent) const {
+    os << indent << "MnEq" << std::endl;
     os << indent+"    " << name << std::endl;
     expn->dump(os, indent+"    ");
 }
@@ -418,7 +779,47 @@ void Pass::dump(std::ostream& os, std::string indent) const {
 
 void Prnt::dump(std::ostream& os, std::string indent) const {
     os << indent << "Prnt" << std::endl;
+    for (Expn_ptr e : exps) {
+        e->dump(os, indent+"    ");
+    }
+}
+
+void IfEl::dump(std::ostream& os, std::string indent) const {
+    os << indent << "IfEl" << std::endl;
+    cndn->dump(os, indent+"    ");
+    then_blck->dump(os, indent+"    ");
+    else_blck->dump(os, indent+"    ");
+}
+
+void Whle::dump(std::ostream& os, std::string indent) const {
+    os << indent << "Whle" << std::endl;
+    cndn->dump(os, indent+"    ");
+    blck->dump(os, indent+"    ");
+}
+
+void PCll::dump(std::ostream& os, std::string indent) const {
+    os << indent << "PCll" << std::endl;
+    os << indent+"    " << name << std::endl;
+    for (Expn_ptr e : params) {
+        e->dump(os, indent+"    ");
+    }
+}
+
+void PRtn::dump(std::ostream& os, std::string indent) const {
+    os << indent << "PRtn" << std::endl;
+}
+
+void FRtn::dump(std::ostream& os, std::string indent) const {
+    os << indent << "FRtn" << std::endl;
     expn->dump(os, indent+"    ");
+}
+
+void FCll::dump(std::ostream& os, std::string indent) const {
+    os << indent << "FCll" << std::endl;
+    os << indent+"    " << name << std::endl;
+    for (Expn_ptr e : params) {
+        e->dump(os, indent+"    ");
+    }
 }
 
 void BiOp::dump(std::ostream& os, std::string indent) const {
@@ -455,5 +856,15 @@ void StrC::dump(std::ostream& os, std::string indent) const {
 
 void SLen::dump(std::ostream& os, std::string indent) const {
     os << indent << "SLen" << std::endl;
+    expn->dump(os, indent+"    ");
+}
+
+void LNeg::dump(std::ostream& os, std::string indent) const {
+    os << indent << "LNeg" << std::endl;
+    expn->dump(os, indent+"    ");
+}
+
+void INeg::dump(std::ostream& os, std::string indent) const {
+    os << indent << "INeg" << std::endl;
     expn->dump(os, indent+"    ");
 }

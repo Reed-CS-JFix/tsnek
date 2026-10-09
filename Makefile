@@ -19,7 +19,7 @@ OBJ=$(SRC:.cc=.o)
 
 all:  $(TARGET)
 
-snki: snek-flex.o snek-bison.tab.o snki.o snek-ast.o snek-util.o 
+snki: snek-flex.o snek-bison.tab.o snki.o snek-ast.o snek-check.o snek-util.o 
 		$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
 
 lexer: snek-flex.cc snek-util.hh snek-flex.hh
@@ -27,9 +27,9 @@ lexer: snek-flex.cc snek-util.hh snek-flex.hh
 snek-flex.cc: snek-flex.ll snek-flex.hh snek-util.hh parser
 		$(LEX) -o $@ snek-flex.ll
 
-parser: snek-bison.tab.cc snek-bison.tab.hh snek-ast.hh snek-util.hh snki.hh
+parser: snek-bison.tab.cc snek-bison.tab.hh snek-ast.hh snek-util.hh snek-check.hh snki.hh
 
-snek-bison.tab.cc: snek-bison.yy snek-ast.hh snek-util.hh snki.hh
+snek-bison.tab.cc: snek-bison.yy snek-ast.hh snek-util.hh snek-check.hh snki.hh
 		$(YACC) $(YACCFLAGS) snek-bison.yy
 
 %.o: %.cc %.hh

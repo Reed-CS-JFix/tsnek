@@ -56,6 +56,7 @@ namespace Snek {
         Driver(std::string filename);
         void parse(void);
         void run(void);
+        void check(void);
         void dump(bool pretty);
         void set(Prgm_ptr prgm) { main = prgm; }
         std::string src_name;
